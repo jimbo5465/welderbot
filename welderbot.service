@@ -1,0 +1,52 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# فایل یونیت systemd برای WelderBot
+# مسیر پیشنهادی نصب: /opt/welderbot/
+#
+# دستورات فعال‌سازی و اجرا:
+#   sudo cp welderbot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable welderbot
+#   sudo systemctl start welderbot
+#   sudo systemctl status welderbot
+#   sudo journalctl -u welderbot -f
+# ══════════════════════════════════════════════════════════════════════════════
+
+[Unit]
+Description=WelderBot — ربات تلگرامی مدیریت آزمون‌های صلاحیت جوشکاری (ASME Sec. IX)
+Documentation=https://github.com/yourorg/welderbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# ── مسیر پروژه روی VPS (مسیر واقعی را جایگزین کنید) ─────────────────────────
+WorkingDirectory=/opt/welderbot
+
+# ── اجرا با Python مجازی ──────────────────────────────────────────────────────
+ExecStart=/opt/welderbot/.venv/bin/python /opt/welderbot/main.py
+
+# ── متغیرهای محیطی — مقادیر واقعی را اینجا قرار دهید ───────────────────────
+Environment=BOT_TOKEN=8939958535:AAFWgWxH3sJ2TBf_HdDiQPUCY-gF6HFCoDo
+Environment=ADMIN_IDS=108422808
+# برای حالت debug، خط زیر را فعال کنید:
+# Environment=WELDERBOT_DEBUG=1
+
+# ── تنظیمات راه‌اندازی مجدد ──────────────────────────────────────────────────
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# ── کاربر اجراکننده (امنیت بیشتر) ──────────────────────────────────────────
+# User=welderbot
+# Group=welderbot
+
+# ── لاگ‌گیری ─────────────────────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=welderbot
+
+# ── محدودیت‌های منابع ────────────────────────────────────────────────────────
+# LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

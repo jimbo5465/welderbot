@@ -1,0 +1,59 @@
+# Python
+
+__pycache__/
+
+*.py[cod]
+
+
+
+# Virtual Environment
+
+.venv/
+
+
+
+# Logs
+
+logs/
+
+*.log
+
+
+
+# Database
+
+*.db
+
+*.sqlite
+
+*.sqlite3
+
+data/*.db
+
+
+
+# Photos & Exports
+
+media/photos/
+
+media/exports/
+
+
+
+# Environment
+
+.env
+
+
+
+# IDE
+
+.vscode/
+
+.idea/
+
+
+
+# Backup
+
+backups/
