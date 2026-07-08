@@ -47,6 +47,7 @@ from db.models import (
     list_welders_by_contractor,
     search_welders,
     set_qualification_inactive,
+    get_user_by_telegram_id,
 )
 from engine.qualification import (
     GTAW_FILLERS,
@@ -1917,7 +1918,10 @@ async def _finalize(msg_or_query, context: ContextTypes.DEFAULT_TYPE, final_stat
     if final_status == "QUALIFIED":
         return await _render_input_expiry_date(msg_or_query, context)
 
-    # برای Rejected و Pending RT: بدون تاریخ انقضا/امضاکننده، مستقیم به خلاصه نهایی
+    # برای Rejected و Pending RT: تاریخ انقضا از کاربر پرسیده نمی‌شود، ولی چون ستون
+    # NOT NULL است و Pending RT برای فیلتر شدن در get_expiring_qualifications به یک
+    # expiry_date نیاز دارد، مقدار پیش‌فرض محاسبه و بی‌صدا ذخیره می‌شود.
+    d["expiry_date"] = compute_expiry_date(d["test_date"], validity_years=2)
     return await _render_final_summary(msg_or_query, context)
 
 
@@ -2028,7 +2032,33 @@ async def _render_final_summary(msg_or_query, context: ContextTypes.DEFAULT_TYPE
     return CONFIRM_AND_SAVE
 
 
-def _build_qualification_payload(context: ContextTypes.DEFAULT_TYPE) -> dict:
+def _resolve_pass_count(d: dict) -> int:
+
+    """pass_count ستون NOT NULL است؛ در حالت‌هایی که اصلاً پرسیده نشده
+
+    (ضخامت<13mm، Fillet، یا GTAW+SMAW که مقدار در gtaw/smaw_pass_count جداست)
+
+    باید یک مقدار معتبر جایگزین شود، نه None."""
+
+    if d.get("pass_count") is not None:
+
+        return d["pass_count"]
+
+    if d.get("process") == "GTAW+SMAW":
+
+        candidates = [c for c in (d.get("gtaw_pass_count"), d.get("smaw_pass_count")) if c is not None]
+
+        if candidates:
+
+            return max(candidates)
+
+    return 1  # ضخامت<13mm یا Fillet — pass_count اصلاً essential variable نیست، مقدار حداقلی ثبت می‌شود
+
+
+
+
+
+def _build_qualification_payload(context: ContextTypes.DEFAULT_TYPE, recorded_by: int) -> dict:
     d = _d(context)
     qr = d["qr_result"]
 
@@ -2057,15 +2087,15 @@ def _build_qualification_payload(context: ContextTypes.DEFAULT_TYPE) -> dict:
     return {
         "welder_id": d["welder_id"],
         "project_id": d["project_id"],
-        "recorded_by": context.user_data.get("telegram_id"),
+        "recorded_by": recorded_by,
         "process": d["process"],
-        "backing": qr["qr_backing"],
+        "backing": "بدون backing",  # ستون CHECK باینری است؛ توضیح کامل در qr_backing ذخیره می‌شود
         "base_metal_p_no": d["base_metal_p_no"],
         "filler_f_no": qr["filler_f_no_display"],
         "filler_aws_class": None,
         "deposit_groove_mm": deposit_groove_mm,
         "deposit_fillet_mm": None,
-        "pass_count": d.get("pass_count"),  # فقط برای حالت تک‌فرآیندی معنادار است
+        "pass_count": _resolve_pass_count(d),
         "specimen_type": d["specimen_type"],
         "pipe_od_mm": d.get("pipe_od_mm"),
         "test_position": d["test_position"],
@@ -2098,7 +2128,15 @@ async def step_confirm_and_save(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text("❌ ثبت لغو شد.", reply_markup=main_menu_keyboard(role))
             return ConversationHandler.END
 
-        payload = _build_qualification_payload(context)
+        db_user = get_user_by_telegram_id(update.effective_user.id)
+
+        if not db_user:
+
+            await query.edit_message_text("❌ کاربر شما در سیستم ثبت نشده. با ادمین تماس بگیرید.")
+
+            return ConversationHandler.END
+
+        payload = _build_qualification_payload(context, db_user["id"])
         qual_id = add_qualification(payload)
         _d(context)["last_qual_id"] = qual_id
         logger.info("قابلیت صلاحیت ثبت شد: id=%d status=%s", qual_id, _d(context).get("final_status"))
