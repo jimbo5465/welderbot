@@ -158,3 +158,23 @@ utils
 # Update Policy
 
 در صورت اضافه شدن Public API جدید، این فایل باید همزمان بروزرسانی شود.
+
+## engine/report_builder.py (فاز ۷)
+
+### build_wpq_excel(qualification_id: int) -> str
+فایل Excel رسمی WPQ را از روی رکورد qualification در دیتابیس می‌سازد.
+فقط از get_qualification_by_id و get_welder_by_id می‌خواند.
+خروجی: مسیر مطلق فایل ذخیره‌شده در config.EXCEL_EXPORT_PATH
+
+### کلیدهای اضافه‌شده به qualifications.extra_data (وضعیت: ⏳ در انتظار اعمال Patch)
+این کلیدها باید در _build_qualification_payload اضافه شوند:
+- filler_gtaw: dict {designation, f_no, sfa} یا None
+- filler_smaw: dict {designation, f_no, sfa} یا None
+- elec_gtaw: dict {current, polarity} یا None
+- elec_smaw: dict {current, polarity} یا None
+- shielding_gas: str یا None
+- progression: str (از qr_result engine گرفته می‌شود)
+
+### ⚠️ فیلد شناسایی‌شده ولی هنوز بدون منبع داده
+"ضخامت نمونه Plate" (برای specimen_type=PLATE) در هیچ‌جای دیتابیس
+ذخیره نمی‌شود — نیاز به بررسی در فاز بعدی.
