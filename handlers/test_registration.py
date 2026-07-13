@@ -14,7 +14,7 @@
 """
 
 from __future__ import annotations
-
+from engine.report_builder import build_wpq_excel
 import logging
 import os
 from datetime import datetime
@@ -2165,10 +2165,26 @@ async def step_ask_generate_excel(update: Update, context: ContextTypes.DEFAULT_
 
         if action == "yes":
             qual_id = _d(context).get("last_qual_id")
-            await query.edit_message_text(
-                f"📊 تولید Excel برای صلاحیت #{qual_id}\n⏳ این قابلیت در فاز ۷ فعال می‌شود.",
-                reply_markup=main_menu_keyboard(role),
-            )
+            try:
+                from engine.report_builder import build_wpq_excel
+                excel_path = build_wpq_excel(qual_id)
+                with open(excel_path, "rb") as f:
+                    await context.bot.send_document(
+                        chat_id=update.effective_chat.id,
+                        document=f,
+                        filename=os.path.basename(excel_path),
+                        caption=f"📊 گزارش WPQ صلاحیت #{qual_id}",
+                    )
+                await query.edit_message_text(
+                    "✅ فایل Excel ارسال شد.\nبه منوی اصلی بازمی‌گردید.",
+                    reply_markup=main_menu_keyboard(role),
+                )
+            except Exception:
+                logger.exception("خطا در تولید Excel برای صلاحیت #%s", qual_id)
+                await query.edit_message_text(
+                    "❌ خطا در تولید فایل Excel. لطفاً با ادمین تماس بگیرید.",
+                    reply_markup=main_menu_keyboard(role),
+                )
         else:
             await query.edit_message_text("✅ ثبت کامل شد.\nبه منوی اصلی بازمی‌گردید.",
                                            reply_markup=main_menu_keyboard(role))
