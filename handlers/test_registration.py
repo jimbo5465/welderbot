@@ -451,7 +451,7 @@ def _validate_phone_ir(text: str) -> bool:
 async def reg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         _clear(context)
-        projects = list_projects(active_only=True)
+        contractors = list_contractors_by_project(_d(context)["project_id"], active_only=True)
         if not projects:
             text = "⚠️ هیچ پروژه‌ای ثبت نشده است."
             role = context.user_data.get("role", "operator")
