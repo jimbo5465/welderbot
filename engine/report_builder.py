@@ -14,9 +14,20 @@ from datetime import datetime
 
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.styles import Alignment
 
 import config
 from db.models import get_qualification_by_id, get_welder_by_id
+
+# ابعاد باکس عکس (P4:R7) بر حسب پیکسل — از روی column width/row height خود
+# template محاسبه شده (۳ ستون عرض ۱۳ | ۴ ردیف ارتفاع ۱۹.۵pt)، با کمی حاشیه
+# اطمینان تا عکس هرگز از باکس بیرون نزند.
+_PHOTO_MAX_WIDTH_PX = 260
+_PHOTO_MAX_HEIGHT_PX = 95
+
+# ستون‌هایی که مقدار در آن‌ها نوشته می‌شود و باید wrap+ارتفاع پویا داشته باشند
+_WRAP_ROWS = list(range(9, 23))
+_WRAP_COLS = ("G", "M")
 
 # مسیر Template اصلاح‌شده (نسخه split‌شده هدر/امضا) — باید یک‌بار در این مسیر قرار گیرد
 TEMPLATE_PATH = os.path.join(config._PROJECT_ROOT, "media", "templates", "WPQ_template.xlsx")
@@ -139,12 +150,16 @@ def build_wpq_excel(qualification_id: int) -> str:
     ws["M7"] = extra.get("wps_no", "")
 
     # ─── عکس جوشکار (P4:R7) ─────────────────────────────────────────────
+    # نکته مهم: عکس‌های واقعی (موبایل) معمولاً چند هزار پیکسل هستند.
+    # باید قبل از insert، نسبت مقیاس را طوری محاسبه کنیم که عکس داخل
+    # باکس بماند (contain-fit) و هرگز از مرز آن بیرون نزند.
     photo_path = _resolve_photo_path(welder.get("photo_path"))
     if photo_path:
         img = XLImage(photo_path)
-        # ابعاد باکس P4:R7 تقریباً ۳ ستون × ۴ ردیف — تنظیم اندازه متناسب
-        img.width = 140
-        img.height = 160
+        orig_w, orig_h = img.width, img.height
+        scale = min(_PHOTO_MAX_WIDTH_PX / orig_w, _PHOTO_MAX_HEIGHT_PX / orig_h)
+        img.width = round(orig_w * scale)
+        img.height = round(orig_h * scale)
         ws.add_image(img, "P4")
 
     # ─── جدول متغیرهای QW-350 (ردیف ۹ تا ۲۲) ───────────────────────────
@@ -165,6 +180,23 @@ def build_wpq_excel(qualification_id: int) -> str:
     ws["G20"] = extra.get("shielding_gas", "")
     ws["G21"] = _fmt_dual_process(qual, "elec_gtaw", "elec_smaw", "current")
     ws["G22"] = _fmt_dual_process(qual, "elec_gtaw", "elec_smaw", "polarity")
+
+    # ─── wrap + ارتفاع پویا برای جدول متغیرها (جلوگیری از overflow متن بلند) ───
+    for row in _WRAP_ROWS:
+        max_len = 0
+        for col in _WRAP_COLS:
+            cell = ws[f"{col}{row}"]
+            cell.alignment = Alignment(
+                horizontal="center", vertical="center", wrap_text=True
+            )
+            if cell.value:
+                max_len = max(max_len, len(str(cell.value)))
+        # تخمین تعداد خط لازم (~35 کاراکتر در هر خط با عرض ستون فعلی) و تنظیم ارتفاع
+        lines_needed = max(1, -(-max_len // 35))  # ceil division
+        if lines_needed > 1:
+            ws.row_dimensions[row].height = max(
+                ws.row_dimensions[row].height or 19.5, lines_needed * 14
+            )
 
     # ─── نتایج تست (ردیف ۲۵ تا ۲۸؛ ردیف ۲۹ همیشه خالی) ──────────────────
     visual_result = extra.get("visual_groove_result") or extra.get("visual_fillet_result")
