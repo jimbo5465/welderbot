@@ -164,6 +164,19 @@ for deployment instructions.
 
 # License
 
+## 🆕 فاز ۷ — خروجی Excel رسمی WPQ (در حال تکمیل)
+
+بعد از ثبت هر آزمون WQT، ربات می‌تواند فایل Excel رسمی (فرم WPQ شرکت) را
+خودکار پر کرده و برای اپراتور ارسال کند.
+
+**وضعیت فعلی:** منطق اصلی و اتصال به ربات کامل و تست‌شده است.
+دو مورد باقی‌مانده:
+- تکمیل چند فیلد فرعی (`progression`, `shielding_gas`, `filler spec` و غیره)
+  در `extra_data` هنگام ذخیره صلاحیت (نیاز به Patch در `_build_qualification_payload`)
+- فیلد «ضخامت نمونه Plate» هنوز در دیتابیس ذخیره نمی‌شود
+
+جزئیات کامل در `CONTRACTS.md` بخش «engine/report_builder.py».
+
 Private Project
 
 Copyright © Mohsen
