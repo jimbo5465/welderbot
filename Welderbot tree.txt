@@ -68,3 +68,9 @@ media/
     templates/
         WPQ_template.xlsx      # 🆕 فاز ۷ — template اصلاح‌شده فرم WPQ
 16 directories, 46 files
+
+handlers/
+    access_management.py       # 🆕 فاز ۸ — مکالمه اعطای دسترسی
+db/
+    models.py                  # ✏️ فاز ۸ — add_project/list_projects تغییر امضا دادند
+    init.py                    # ✏️ فاز ۸ — جداول access_grants, pending_users, project_contractors
