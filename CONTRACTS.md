@@ -178,3 +178,38 @@ utils
 ### ⚠️ فیلد شناسایی‌شده ولی هنوز بدون منبع داده
 "ضخامت نمونه Plate" (برای specimen_type=PLATE) در هیچ‌جای دیتابیس
 ذخیره نمی‌شود — نیاز به بررسی در فاز بعدی.
+
+## سیستم دسترسی (فاز ۸)
+
+### db/models.py — توابع جدید
+- `register_pending_user(telegram_id, full_name, username) -> None`
+- `list_pending_users(exclude_telegram_ids=None) -> list[dict]`
+- `add_access_grant(telegram_id, level, granted_by, project_id=None, contractor_id=None) -> int`
+- `get_access_grants_by_telegram(telegram_id, active_only=True) -> list[dict]`
+- `revoke_access_grant(grant_id) -> None`
+- `list_grants_by_project(project_id) -> list[dict]`
+- `link_project_contractor(project_id, contractor_id) -> None`
+- `unlink_project_contractor(project_id, contractor_id) -> None`
+- `list_contractors_by_project(project_id, active_only=True) -> list[dict]`
+- `list_projects_by_contractor(contractor_id, active_only=True) -> list[dict]`
+
+### db/models.py — امضای تغییریافته
+- `add_project(name)` — دیگر `contractor_id` نمی‌گیرد (چند‌به‌چند شد)
+- `list_projects(active_only=True)` — دیگر پارامتر `contractor_id` ندارد
+
+### handlers/auth.py — توابع جدید
+LEVEL_PROJECT_MANAGER = 1, LEVEL_CONTRACTOR_MANAGER = 2, LEVEL_OPERATOR = 3
+get_effective_level(telegram_id, project_id=None, contractor_id=None) -> int|None
+can_manage_projects(telegram_id) -> bool
+can_manage_contractors(telegram_id, project_id) -> bool
+can_select_contractor(telegram_id, project_id, contractor_id) -> bool
+can_grant_level3(telegram_id, project_id) -> bool
+
+### handlers/keyboards.py — تغییریافته
+`main_menu_keyboard(telegram_id)` — دیگر `role` نمی‌گیرد، مستقیم `telegram_id`
+می‌گیرد و خودش سطح را تشخیص می‌دهد.
+
+
+
+
+
