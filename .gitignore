@@ -58,3 +58,4 @@ media/exports/
 
 backups/
 *.bak_*
+data/
