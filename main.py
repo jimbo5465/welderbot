@@ -78,6 +78,7 @@ from handlers.welders import (
 
 # handler فاز ۶: ثبت آزمون WQT
 from handlers.test_registration import get_registration_conversation_handler
+from handlers.access_management import get_access_management_conversation_handler
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -220,6 +221,10 @@ def main() -> None:
     # مدیریت جوشکاران (فاز ۵) — ConversationHandler(per_message=False)
     app.add_handler(get_welder_conversation_handler())
     logger.info("  ✓ ConversationHandler جوشکاران ثبت شد")
+
+    # مدیریت دسترسی (فاز ۸) — ConversationHandler(per_message=False)
+    app.add_handler(get_access_management_conversation_handler())
+    logger.info("  ✓ ConversationHandler مدیریت دسترسی ثبت شد")
 
     # ج) CommandHandlers (/start، /cancel، /help)
     for handler in get_menu_handlers():

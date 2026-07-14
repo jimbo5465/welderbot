@@ -16,6 +16,7 @@ from telegram.ext import (
 )
 
 from handlers.auth import ensure_user_registered, require_auth, ROLE_ADMIN
+from db.models import register_pending_user
 from handlers.keyboards import main_menu_keyboard, back_to_main_keyboard
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not tg_user:
             return
 
+        # هر کاربری که /start می‌زند، صرف‌نظر از دسترسی، در pending_users ثبت
+        # می‌شود — تا ادمین بتواند بعداً او را برای اعطای دسترسی انتخاب کند
+        register_pending_user(
+            telegram_id=tg_user.id,
+            full_name=tg_user.full_name or "بدون نام",
+            username=tg_user.username,
+        )
+
         # تشخیص نقش و ثبت خودکار admin در DB
         role = await ensure_user_registered(update, context)
 
@@ -61,7 +70,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         msg = _MSG_WELCOME_ADMIN if role == ROLE_ADMIN else _MSG_WELCOME_OPERATOR
         await update.message.reply_text(
             msg,
-            reply_markup=main_menu_keyboard(role),
+            reply_markup=main_menu_keyboard(tg_user.id),
         )
 
     except Exception:
@@ -92,7 +101,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["role"] = role
         await query.edit_message_text(
             _MSG_BACK_TO_MENU,
-            reply_markup=main_menu_keyboard(role),
+            reply_markup=main_menu_keyboard(tg_user.id),
         )
 
     except Exception:

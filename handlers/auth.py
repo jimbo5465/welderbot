@@ -41,10 +41,23 @@ def get_role(telegram_id: int) -> str | None:
     if telegram_id in config.ADMIN_IDS:
         return ROLE_ADMIN
 
-    # بررسی DB برای operator‌های ثبت‌شده
+    # بررسی DB برای operator‌های ثبت‌شده (سیستم قدیمی نقش)
     user = get_user_by_telegram_id(telegram_id)
     if user and user.get("is_active") == 1:
         return user.get("role")
+
+    # فاز ۸: کاربرانی که فقط از طریق access_grants دسترسی دارند و در
+    # جدول قدیمی users رکوردی ندارند، هم باید «ثبت‌شده» شناخته شوند —
+    # وگرنه با وجود داشتن access_grant معتبر، ربات همچنان به آن‌ها
+    # می‌گوید «حساب شما ثبت نشده».
+    # نکته: اینجا از get_access_grants_by_telegram مستقیم استفاده می‌کنیم
+    # (نه get_effective_level) چون در این نقطه هیچ project_id/contractor_id
+    # مشخصی در دست نیست — فقط می‌خواهیم بدانیم «آیا اصلاً هر نوع دسترسی
+    # فعالی دارد یا نه»، صرف‌نظر از محدوده‌اش.
+    grants = get_access_grants_by_telegram(telegram_id, active_only=True)
+    if grants:
+        has_level1 = any(g["level"] == LEVEL_PROJECT_MANAGER for g in grants)
+        return ROLE_ADMIN if has_level1 else ROLE_OPERATOR
 
     return None
 

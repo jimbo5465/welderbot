@@ -8,18 +8,19 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from handlers.auth import ROLE_ADMIN
+from handlers.auth import can_manage_projects, get_effective_level, LEVEL_CONTRACTOR_MANAGER
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # منوی اصلی
 # ══════════════════════════════════════════════════════════════════════════════
 
-def main_menu_keyboard(role: str) -> InlineKeyboardMarkup:
+def main_menu_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     """
-    keyboard منوی اصلی را بر اساس نقش کاربر می‌سازد.
+    keyboard منوی اصلی را بر اساس سطح دسترسی مؤثر کاربر می‌سازد (فاز ۸).
 
     ورودی:
-        role: 'admin' یا 'operator'
+        telegram_id: شناسه تلگرام کاربر
 
     خروجی:
         InlineKeyboardMarkup منوی اصلی
@@ -31,11 +32,15 @@ def main_menu_keyboard(role: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📊 گزارش صلاحیت‌ها",  callback_data="menu:report")],
     ]
 
-    # دکمه‌های اختصاصی admin
-    if role == ROLE_ADMIN:
+    is_level1 = can_manage_projects(telegram_id)
+    # آیا کاربر حداقل در یک پروژه سطح ۲ (یا بالاتر) دارد؟
+    has_level2_somewhere = is_level1 or get_effective_level(telegram_id) == LEVEL_CONTRACTOR_MANAGER
+
+    if is_level1:
+        buttons.append([InlineKeyboardButton("🏗️ مدیریت پروژه‌ها",  callback_data="admin:projects")])
+    if has_level2_somewhere or is_level1:
         buttons.append([InlineKeyboardButton("⚙️ مدیریت پیمانکاران", callback_data="admin:contractors")])
         buttons.append([InlineKeyboardButton("👥 مدیریت کاربران",    callback_data="admin:users")])
-        buttons.append([InlineKeyboardButton("🏗️ مدیریت پروژه‌ها",  callback_data="admin:projects")])
 
     return InlineKeyboardMarkup(buttons)
 
@@ -142,3 +147,52 @@ def welder_edit_fields_keyboard(welder_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🖼 عکس",          callback_data=f"edit:wldr_photo:{welder_id}")],
         [InlineKeyboardButton("◀️ بازگشت",       callback_data=f"wldr:{welder_id}")],
     ])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# keyboard‌های مدیریت دسترسی (فاز ۸)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def pending_users_keyboard(users: list[dict]) -> InlineKeyboardMarkup:
+    """keyboard انتخاب کاربر از فهرست pending_users."""
+    buttons = [
+        [InlineKeyboardButton(f"👤 {u['full_name']}", callback_data=f"pend:{u['telegram_id']}")]
+        for u in users
+    ]
+    buttons.append([InlineKeyboardButton("❌ انصراف", callback_data="menu:main")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def level_select_keyboard(allow_level1: bool) -> InlineKeyboardMarkup:
+    """
+    keyboard انتخاب سطح دسترسی.
+    allow_level1: فقط سطح ۱ (ادمین کل) می‌تواند سطح ۱ یا ۲ معرفی کند؛
+                  سطح ۲ فقط اجازه معرفی سطح ۳ دارد.
+    """
+    buttons = []
+    if allow_level1:
+        buttons.append([InlineKeyboardButton("۱ — مدیر پروژه (سراسری)", callback_data="lvl:1")])
+        buttons.append([InlineKeyboardButton("۲ — مدیر پیمانکار (یک پروژه)", callback_data="lvl:2")])
+    buttons.append([InlineKeyboardButton("۳ — اپراتور (یک پیمانکار)", callback_data="lvl:3")])
+    buttons.append([InlineKeyboardButton("❌ انصراف", callback_data="menu:main")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def project_select_keyboard(projects: list[dict]) -> InlineKeyboardMarkup:
+    """keyboard انتخاب پروژه برای اعطای دسترسی سطح ۲ یا ۳."""
+    buttons = [
+        [InlineKeyboardButton(f"🏗️ {p['name']}", callback_data=f"gproj:{p['id']}")]
+        for p in projects
+    ]
+    buttons.append([InlineKeyboardButton("❌ انصراف", callback_data="menu:main")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def grant_contractor_select_keyboard(contractors: list[dict]) -> InlineKeyboardMarkup:
+    """keyboard انتخاب پیمانکار برای اعطای دسترسی سطح ۳."""
+    buttons = [
+        [InlineKeyboardButton(f"🏢 {c['name']}", callback_data=f"gcntr:{c['id']}")]
+        for c in contractors
+    ]
+    buttons.append([InlineKeyboardButton("❌ انصراف", callback_data="menu:main")])
+    return InlineKeyboardMarkup(buttons)
