@@ -216,3 +216,33 @@ Template مرجع (فرم اصلاح‌شده با split شدن سلول‌ها�
 هر قابلیت جدید باید به صورت یک Handler مستقل پیاده‌سازی شود.
 
 برای اضافه شدن یک Feature جدید، فقط ثبت Handler جدید در main.py مجاز است و ساختار معماری پروژه نباید تغییر کند.
+
+
+## 🆕 سیستم دسترسی (فاز ۸)
+
+### جداول جدید
+- `access_grants` — هر ردیف یک دسترسی: `(telegram_id, level, project_id, contractor_id)`.
+  سطح ۱: project_id و contractor_id هر دو NULL. سطح ۲: فقط project_id.
+  سطح ۳: هر دو پر.
+- `pending_users` — هر کسی که `/start` زده، صرف‌نظر از داشتن دسترسی.
+- `project_contractors` — رابطه‌ی چند‌به‌چند پروژه⇆پیمانکار (جایگزین ستون
+  حذف‌شده‌ی `projects.contractor_id`).
+
+### منطق مرکزی: `handlers/auth.py`
+توابع تصمیم‌گیری (`get_effective_level`, `can_manage_projects`,
+`can_manage_contractors`, `can_select_contractor`, `can_grant_level3`) —
+همه‌ی handlerهای جدید باید فقط از این توابع استفاده کنند، نه SQL مستقیم.
+
+`get_role()` قدیمی (سیستم admin/operator) اصلاح شد تا کاربران فاز۸ (که فقط
+در `access_grants` رکورد دارند، نه در `users`) را هم «ثبت‌شده» بشناسد.
+
+### فایل جدید: `handlers/access_management.py`
+ConversationHandler مستقل برای اعطای دسترسی. الگوی state machine ساده
+(بدون پشته back/cancel، شبیه `welders.py`) — نه الگوی پیچیده‌ی
+`test_registration.py`.
+
+### ⚠️ بدهی فنی باقی‌مانده
+`handlers/projects.py` و `handlers/contractors.py` هنوز ساخته نشده‌اند.
+باید دقیقاً از الگوی `handlers/welders.py` + `handlers/keyboards.py` پیروی
+کنند، و برای گیت‌کردن دسترسی از `can_manage_projects` /
+`can_manage_contractors` (فاز ۸) استفاده کنند.
