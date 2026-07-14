@@ -24,6 +24,59 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_project_contractor_m2m(cur) -> None:
+    """
+    اگر ستون قدیمی projects.contractor_id هنوز وجود دارد:
+      ۱. جدول رابط project_contractors را می‌سازد
+      ۲. داده‌های موجود را از contractor_id به جدول رابط منتقل می‌کند
+      ۳. جدول projects را بدون contractor_id بازسازی می‌کند
+    idempotent است — اجرای مکرر بی‌خطر است.
+    """
+    cols = [row[1] for row in cur.execute("PRAGMA table_info(projects)").fetchall()]
+    if "contractor_id" not in cols:
+        return
+
+    # موقتاً بررسی FK را خاموش می‌کنیم — چون در ادامه جدول projects قدیمی
+    # DROP می‌شود در حالی که project_contractors تازه‌ساخته به آن اشاره دارد
+    cur.execute("PRAGMA foreign_keys = OFF")
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project_contractors (
+            project_id     INTEGER NOT NULL REFERENCES projects(id),
+            contractor_id  INTEGER NOT NULL REFERENCES contractors(id),
+            PRIMARY KEY (project_id, contractor_id)
+        )
+    """)
+
+    cur.execute("""
+        INSERT OR IGNORE INTO project_contractors (project_id, contractor_id)
+        SELECT id, contractor_id FROM projects WHERE contractor_id IS NOT NULL
+    """)
+
+    cur.execute("""
+        CREATE TABLE projects_new (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT    NOT NULL UNIQUE,
+            is_active       INTEGER NOT NULL DEFAULT 1
+                            CHECK (is_active IN (0, 1)),
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    cur.execute("""
+        INSERT INTO projects_new (id, name, is_active, created_at)
+        SELECT id, name, is_active, created_at FROM projects
+    """)
+    cur.execute("DROP TABLE projects")
+    cur.execute("ALTER TABLE projects_new RENAME TO projects")
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_project_contractors_contractor
+        ON project_contractors(contractor_id)
+    """)
+
+    cur.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db() -> None:
     """
     پایگاه داده SQLite را مقداردهی اولیه می‌کند.
@@ -76,6 +129,9 @@ def init_db() -> None:
                 UNIQUE (name, contractor_id)
             )
         """)
+
+        # ── migration: تبدیل رابطه projects/contractors به چند-به-چند (فاز ۸) ─
+        _migrate_project_contractor_m2m(cur)
 
         # ── جدول materials ───────────────────────────────────────────────────
         cur.execute("""
@@ -172,6 +228,39 @@ def init_db() -> None:
             cur.execute("ALTER TABLE qualifications ADD COLUMN extra_data TEXT")
         except Exception:
             pass  # ستون قبلاً وجود دارد
+
+        # ── جدول pending_users (فاز ۸) ───────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pending_users (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id     INTEGER NOT NULL UNIQUE,
+                full_name       TEXT    NOT NULL,
+                username        TEXT,
+                first_seen_at   TEXT    NOT NULL,
+                last_seen_at    TEXT    NOT NULL
+            )
+        """)
+
+        # ── جدول access_grants (فاز ۸) ───────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS access_grants (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id     INTEGER NOT NULL,
+                level           INTEGER NOT NULL
+                                CHECK (level IN (1, 2, 3)),
+                project_id      INTEGER
+                                REFERENCES projects(id),
+                contractor_id   INTEGER
+                                REFERENCES contractors(id),
+                granted_by      INTEGER NOT NULL,
+                granted_at      TEXT    NOT NULL,
+                is_active       INTEGER NOT NULL DEFAULT 1
+                                CHECK (is_active IN (0, 1))
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_access_grants_telegram ON access_grants(telegram_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_access_grants_project ON access_grants(project_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_access_grants_contractor ON access_grants(contractor_id)")
 
         # ── شاخص‌ها (از DATA_SCHEMA.md) ──────────────────────────────────────
         cur.execute("""

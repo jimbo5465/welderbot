@@ -172,62 +172,95 @@ def list_contractors(active_only: bool = True) -> list[dict]:
 # مدیریت پروژه‌ها (جدول projects)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def add_project(name: str, contractor_id: int) -> int:
+def add_project(name: str) -> int:
     """
-    پروژه جدید اضافه می‌کند.
+    پروژه جدید اضافه می‌کند (بدون پیمانکار — پیمانکارها بعداً با
+    link_project_contractor به آن وصل می‌شوند).
 
     ورودی:
-        name:          نام پروژه
-        contractor_id: شناسه پیمانکار مربوط (FK → contractors.id)
+        name: نام پروژه (باید یکتا باشد)
 
     خروجی:
         id ردیف جدید در جدول projects
 
     خطا:
-        sqlite3.IntegrityError اگر ترکیب (name, contractor_id) تکراری باشد
+        sqlite3.IntegrityError اگر نام تکراری باشد
     """
     with get_connection() as conn:
         cur = conn.execute(
-            """
-            INSERT INTO projects (name, contractor_id, is_active, created_at)
-            VALUES (?, ?, 1, ?)
-            """,
-            (name, contractor_id, _now_str()),
+            "INSERT INTO projects (name, is_active, created_at) VALUES (?, 1, ?)",
+            (name, _now_str()),
         )
         conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
 
 
-def list_projects(
-    contractor_id: int | None = None,
-    active_only: bool = True,
-) -> list[dict]:
+def list_projects(active_only: bool = True) -> list[dict]:
     """
-    فهرست پروژه‌ها را برمی‌گرداند.
-
-    ورودی:
-        contractor_id: اگر مشخص شود فقط پروژه‌های آن پیمانکار برگردانده می‌شوند
-        active_only:   اگر True باشد فقط پروژه‌های فعال برگردانده می‌شوند
-
-    خروجی:
-        لیستی از dict‌های پروژه
+    فهرست پروژه‌ها را برمی‌گرداند (بدون فیلتر پیمانکار — هر پروژه می‌تواند
+    چند پیمانکار داشته باشد؛ برای پیمانکارهای یک پروژه از
+    list_contractors_by_project استفاده کنید).
     """
     with get_connection() as conn:
-        # ساختار پویای query با parameterized placeholders
-        conditions: list[str] = []
-        params: list = []
-
+        query = "SELECT * FROM projects"
         if active_only:
-            conditions.append("is_active = 1")
-        if contractor_id is not None:
-            conditions.append("contractor_id = ?")
-            params.append(contractor_id)
+            query += " WHERE is_active = 1"
+        query += " ORDER BY name"
+        rows = conn.execute(query).fetchall()
+        return _rows_to_dicts(rows)
 
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        rows = conn.execute(
-            f"SELECT * FROM projects {where} ORDER BY name",
-            params,
-        ).fetchall()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# رابطه چند-به-چند پروژه ⇆ پیمانکار (جدول project_contractors) — فاز ۸
+# ══════════════════════════════════════════════════════════════════════════════
+
+def link_project_contractor(project_id: int, contractor_id: int) -> None:
+    """یک پیمانکار را به یک پروژه وصل می‌کند. idempotent (تکرار بی‌خطر)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO project_contractors (project_id, contractor_id) VALUES (?, ?)",
+            (project_id, contractor_id),
+        )
+        conn.commit()
+
+
+def unlink_project_contractor(project_id: int, contractor_id: int) -> None:
+    """اتصال یک پیمانکار به یک پروژه را قطع می‌کند."""
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM project_contractors WHERE project_id = ? AND contractor_id = ?",
+            (project_id, contractor_id),
+        )
+        conn.commit()
+
+
+def list_contractors_by_project(project_id: int, active_only: bool = True) -> list[dict]:
+    """فهرست پیمانکارهای متصل به یک پروژه مشخص را برمی‌گرداند."""
+    with get_connection() as conn:
+        query = """
+            SELECT c.* FROM contractors c
+            JOIN project_contractors pc ON pc.contractor_id = c.id
+            WHERE pc.project_id = ?
+        """
+        if active_only:
+            query += " AND c.is_active = 1"
+        query += " ORDER BY c.name"
+        rows = conn.execute(query, (project_id,)).fetchall()
+        return _rows_to_dicts(rows)
+
+
+def list_projects_by_contractor(contractor_id: int, active_only: bool = True) -> list[dict]:
+    """فهرست پروژه‌هایی که یک پیمانکار مشخص در آن‌ها فعال است."""
+    with get_connection() as conn:
+        query = """
+            SELECT p.* FROM projects p
+            JOIN project_contractors pc ON pc.project_id = p.id
+            WHERE pc.contractor_id = ?
+        """
+        if active_only:
+            query += " AND p.is_active = 1"
+        query += " ORDER BY p.name"
+        rows = conn.execute(query, (contractor_id,)).fetchall()
         return _rows_to_dicts(rows)
 
 
@@ -790,3 +823,105 @@ def update_welder_photo(welder_id: int, photo_path: str) -> None:
             (photo_path, welder_id),
         )
         conn.commit()
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# مدیریت کاربران در انتظار (جدول pending_users) — فاز ۸
+# ══════════════════════════════════════════════════════════════════════════════
+
+def register_pending_user(telegram_id: int, full_name: str, username: str | None) -> None:
+    """
+    هر بار کاربر /start می‌زند فراخوانی می‌شود.
+    اگر کاربر جدید است ثبت می‌شود؛ اگر قبلاً بوده، last_seen_at به‌روز می‌شود.
+    idempotent است.
+    """
+    now = _now_str()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO pending_users (telegram_id, full_name, username, first_seen_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                full_name = excluded.full_name,
+                username = excluded.username,
+                last_seen_at = excluded.last_seen_at
+            """,
+            (telegram_id, full_name, username, now, now),
+        )
+        conn.commit()
+
+
+def list_pending_users(exclude_telegram_ids: list[int] | None = None) -> list[dict]:
+    """فهرست کاربرانی که تا الان /start زده‌اند را برمی‌گرداند (جدیدترین اول)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pending_users ORDER BY last_seen_at DESC"
+        ).fetchall()
+        result = _rows_to_dicts(rows)
+        if exclude_telegram_ids:
+            result = [r for r in result if r["telegram_id"] not in exclude_telegram_ids]
+        return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# مدیریت سطوح دسترسی (جدول access_grants) — فاز ۸
+# ══════════════════════════════════════════════════════════════════════════════
+
+def add_access_grant(
+    telegram_id: int,
+    level: int,
+    granted_by: int,
+    project_id: int | None = None,
+    contractor_id: int | None = None,
+) -> int:
+    """
+    یک دسترسی جدید ثبت می‌کند.
+    سطح ۱: project_id=None, contractor_id=None (سراسری)
+    سطح ۲: project_id=مقدار, contractor_id=None
+    سطح ۳: project_id=مقدار, contractor_id=مقدار
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO access_grants
+                (telegram_id, level, project_id, contractor_id, granted_by, granted_at, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            """,
+            (telegram_id, level, project_id, contractor_id, granted_by, _now_str()),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_access_grants_by_telegram(telegram_id: int, active_only: bool = True) -> list[dict]:
+    """تمام دسترسی‌های یک کاربر را برمی‌گرداند (ممکن است چند grant داشته باشد)."""
+    with get_connection() as conn:
+        if active_only:
+            rows = conn.execute(
+                "SELECT * FROM access_grants WHERE telegram_id = ? AND is_active = 1",
+                (telegram_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM access_grants WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchall()
+        return _rows_to_dicts(rows)
+
+
+def revoke_access_grant(grant_id: int) -> None:
+    """یک دسترسی را غیرفعال می‌کند (soft-delete)."""
+    with get_connection() as conn:
+        conn.execute("UPDATE access_grants SET is_active = 0 WHERE id = ?", (grant_id,))
+        conn.commit()
+
+
+def list_grants_by_project(project_id: int) -> list[dict]:
+    """تمام دسترسی‌های سطح ۲ و ۳ مربوط به یک پروژه را برمی‌گرداند."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM access_grants WHERE project_id = ? AND is_active = 1",
+            (project_id,),
+        ).fetchall()
+        return _rows_to_dicts(rows)
