@@ -43,6 +43,7 @@ from db.models import (
     get_welder_by_id,
     get_welder_by_national_id,
     list_contractors,
+    list_contractors_by_project,
     list_projects,
     list_welders_by_contractor,
     search_welders,
@@ -451,7 +452,7 @@ def _validate_phone_ir(text: str) -> bool:
 async def reg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         _clear(context)
-        contractors = list_contractors_by_project(_d(context)["project_id"], active_only=True)
+        projects = list_projects(active_only=True)
         if not projects:
             text = "⚠️ هیچ پروژه‌ای ثبت نشده است."
             role = context.user_data.get("role", "operator")
@@ -509,7 +510,7 @@ async def step_select_project(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _render_select_contractor(q, context: ContextTypes.DEFAULT_TYPE) -> int:
-    contractors = list_contractors(active_only=True)
+    contractors = list_contractors_by_project(_d(context)["project_id"], active_only=True)
     _d(context)["contractors"] = {c["id"]: c for c in contractors}
     _d(context)["_current_state"] = SELECT_CONTRACTOR
     await q.edit_message_text(
