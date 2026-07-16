@@ -452,9 +452,19 @@ def _validate_phone_ir(text: str) -> bool:
 async def reg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         _clear(context)
-        projects = list_projects(active_only=True)
+        from handlers.auth import get_my_project_ids  # فاز ۱۱: محدودسازی بر اساس سطح دسترسی
+
+        telegram_id = update.effective_user.id
+        all_projects = list_projects(active_only=True)
+        my_project_ids = get_my_project_ids(telegram_id)
+
+        if my_project_ids is None:
+            projects = all_projects  # سطح ۱: بدون محدودیت
+        else:
+            projects = [p for p in all_projects if p["id"] in my_project_ids]  # سطح ۲/۳
+
         if not projects:
-            text = "⚠️ هیچ پروژه‌ای ثبت نشده است."
+            text = "⚠️ هیچ پروژه‌ای برای شما تعریف نشده است. با مدیر سیستم تماس بگیرید."
             role = context.user_data.get("role", "operator")
             if update.callback_query:
                 await update.callback_query.answer()
@@ -510,14 +520,73 @@ async def step_select_project(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _render_select_contractor(q, context: ContextTypes.DEFAULT_TYPE) -> int:
-    contractors = list_contractors_by_project(_d(context)["project_id"], active_only=True)
+
+    from handlers.auth import get_my_contractor_id_for_project
+
+
+
+    project_id = _d(context)["project_id"]
+
+    telegram_id = q.from_user.id
+
+    all_contractors = list_contractors_by_project(project_id, active_only=True)
+
+
+
+    my_contractor_id = get_my_contractor_id_for_project(telegram_id, project_id)
+
+    if my_contractor_id is not None:
+
+        contractors = [c for c in all_contractors if c["id"] == my_contractor_id]
+
+        if not contractors:
+
+            await q.edit_message_text(
+
+                "⚠️ پیمانکار شما در این پروژه در حال حاضر فعال نیست.\n"
+
+                "برای اطلاعات بیشتر با مدیر سیستم تماس بگیرید."
+
+            )
+
+            return ConversationHandler.END
+
+    else:
+
+        contractors = all_contractors
+
+
+
     _d(context)["contractors"] = {c["id"]: c for c in contractors}
+
     _d(context)["_current_state"] = SELECT_CONTRACTOR
+
+
+
+    if my_contractor_id is not None and len(contractors) == 1:
+
+        contractor = contractors[0]
+
+        _d(context)["contractor_id"] = contractor["id"]
+
+        _d(context)["contractor_name"] = contractor["name"]
+
+        _push(context, SELECT_CONTRACTOR)
+
+        return await _render_new_or_retest(q, context)
+
+
+
     await q.edit_message_text(
-        f"✅ پروژه: *{_d(context)['project_name']}*\n\n🏢 پیمانکار را انتخاب کنید:",
+
+        f"✅ پروژه: *{{_d(context)['project_name']}}*\n\n🏢 پیمانکار را انتخاب کنید:",
+
         parse_mode="Markdown", reply_markup=_contractors_kb(contractors),
+
     )
+
     return SELECT_CONTRACTOR
+
 
 
 async def step_select_contractor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

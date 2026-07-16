@@ -88,9 +88,9 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         query = update.callback_query
         await query.answer()
 
+        tg_user = update.effective_user
         role = context.user_data.get("role")
         if not role:
-            tg_user = update.effective_user
             from handlers.auth import get_role
             role = get_role(tg_user.id) if tg_user else None
 

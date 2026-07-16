@@ -235,7 +235,13 @@ def unlink_project_contractor(project_id: int, contractor_id: int) -> None:
 
 
 def list_contractors_by_project(project_id: int, active_only: bool = True) -> list[dict]:
-    """فهرست پیمانکارهای متصل به یک پروژه مشخص را برمی‌گرداند."""
+    """
+    فهرست پیمانکارهای متصل به یک پروژه مشخص را برمی‌گرداند.
+
+    فاز ۱۰: active_only اکنون هم رابطهٔ پروژه⇆پیمانکار (project_contractors.status)
+    و هم خود پیمانکار (contractors.is_active) را چک می‌کند — قبلاً فقط دومی را
+    چک می‌کرد، که باعث می‌شد پیمانکار خاتمه‌یافته در یک پروژه هنوز قابل‌انتخاب باشد.
+    """
     with get_connection() as conn:
         query = """
             SELECT c.* FROM contractors c
@@ -243,7 +249,7 @@ def list_contractors_by_project(project_id: int, active_only: bool = True) -> li
             WHERE pc.project_id = ?
         """
         if active_only:
-            query += " AND c.is_active = 1"
+            query += " AND pc.status = 'active' AND c.is_active = 1"
         query += " ORDER BY c.name"
         rows = conn.execute(query, (project_id,)).fetchall()
         return _rows_to_dicts(rows)
@@ -925,3 +931,377 @@ def list_grants_by_project(project_id: int) -> list[dict]:
             (project_id,),
         ).fetchall()
         return _rows_to_dicts(rows)
+# ══════════════════════════════════════════════════════════════════════════════
+# این بلوک را به انتهای db/models.py اضافه کنید.
+# چرخهٔ حیات پروژه — فاز ۹ (خاتمه/فعال‌سازی مجدد پروژه)
+#
+# قوانین قفل‌شده (طبق تصمیمات فاز ۹):
+#   - خاتمهٔ پروژه = soft (is_active=0)، قابل بازگشت، فقط سطح ۱ (گیت در handler)
+#   - نام پروژه حتی بعد از خاتمه یکتا می‌ماند (UNIQUE constraint فعلی جدول کافی است)
+#   - خاتمه هیچ رکورد وابسته‌ای (پیمانکار/جوشکار/صلاحیت) را تغییر نمی‌دهد
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_project_by_id(project_id: int) -> dict | None:
+    """
+    پروژه را با شناسه برمی‌گرداند.
+
+    ورودی:
+        project_id: شناسه پروژه
+
+    خروجی:
+        dict شامل تمام فیلدهای جدول projects، یا None اگر یافت نشد
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM projects WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def update_project_name(project_id: int, name: str) -> None:
+    """
+    نام پروژه را تغییر می‌دهد (تنها فیلد قابل‌ویرایش پروژه در حال حاضر).
+
+    ورودی:
+        project_id: شناسه پروژه
+        name:       نام جدید (باید یکتا باشد)
+
+    خطا:
+        sqlite3.IntegrityError اگر نام تکراری باشد (حتی با پروژهٔ غیرفعال)
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE projects SET name = ? WHERE id = ?",
+            (name, project_id),
+        )
+        conn.commit()
+
+
+def set_project_inactive(project_id: int) -> None:
+    """
+    پروژه را خاتمه می‌دهد (soft-delete: is_active = 0).
+    هرگز DELETE — رکوردهای وابسته (project_contractors، qualifications با
+    این project_id) دست‌نخورده و قابل مشاهده باقی می‌مانند.
+
+    ورودی:
+        project_id: شناسه پروژه
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE projects SET is_active = 0 WHERE id = ?",
+            (project_id,),
+        )
+        conn.commit()
+
+
+def reactivate_project(project_id: int) -> None:
+    """
+    پروژهٔ خاتمه‌یافته را دوباره فعال می‌کند (is_active = 1).
+
+    ورودی:
+        project_id: شناسه پروژه
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE projects SET is_active = 1 WHERE id = ?",
+            (project_id,),
+        )
+        conn.commit()
+
+
+def get_project_stats(project_id: int) -> dict:
+    """
+    شمار رکوردهای فعال وابسته به یک پروژه را برمی‌گرداند — برای نمایش
+    هشدار به سطح ۱ قبل از خاتمهٔ پروژه («این پروژه شامل X پیمانکار فعال
+    و Y صلاحیت فعال است»).
+
+    ورودی:
+        project_id: شناسه پروژه
+
+    خروجی:
+        dict:
+            active_contractors:    تعداد پیمانکار فعال متصل به این پروژه
+            active_qualifications: تعداد صلاحیت فعال ثبت‌شده در این پروژه
+    """
+    with get_connection() as conn:
+        contractors_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM project_contractors pc
+            JOIN contractors c ON c.id = pc.contractor_id
+            WHERE pc.project_id = ? AND c.is_active = 1
+            """,
+            (project_id,),
+        ).fetchone()[0]
+
+        qualifications_count = conn.execute(
+            "SELECT COUNT(*) FROM qualifications WHERE project_id = ? AND is_active = 1",
+            (project_id,),
+        ).fetchone()[0]
+
+        return {
+            "active_contractors": contractors_count,
+            "active_qualifications": qualifications_count,
+        }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# این بلوک را به انتهای db/models.py اضافه کنید.
+# پیش‌نیاز: migration فاز ۹.۵ (db_init_migration_ADD_TO_init_py.py) باید قبلاً
+# روی دیتابیس اجرا شده باشد (project_contractors ستون‌های id/status/label دارد).
+#
+# مدل ذهنی:
+#   - contractors: entity سراسری، فقط name/is_active/created_at. name یکتاست.
+#   - project_contractors: رابطهٔ پروژه⇆پیمانکار با چرخهٔ‌حیات مستقل از خود
+#     پیمانکار. یک جفت (project_id, contractor_id) می‌تواند چند رکورد
+#     تاریخی داشته باشد اما فقط یکی status='active'.
+#   - "خاتمهٔ پیمانکار در پروژه" یعنی خاتمهٔ همین رکورد رابطه، نه خود پیمانکار.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+# ── پیمانکار (entity سراسری) ────────────────────────────────────────────────
+
+def get_contractor_by_id(contractor_id: int) -> dict | None:
+    """پیمانکار را با شناسه برمی‌گرداند، یا None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM contractors WHERE id = ?", (contractor_id,)
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def get_contractor_by_name(name: str) -> dict | None:
+    """
+    پیمانکار را با نام دقیق (case-sensitive) برمی‌گرداند.
+    برای تشخیص «این پیمانکار قبلاً در پروژهٔ دیگری ثبت شده، لینک کنیم نه
+    دوباره بسازیم» استفاده می‌شود.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM contractors WHERE name = ?", (name,)
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def update_contractor_name(contractor_id: int, name: str) -> None:
+    """
+    نام سراسری پیمانکار را تغییر می‌دهد. این تغییر روی همهٔ پروژه‌هایی که
+    این پیمانکار در آن‌ها لینک شده اثر می‌گذارد — فقط سطح ۱ باید این را
+    صدا بزند (گیت در handler، نه اینجا).
+
+    خطا:
+        sqlite3.IntegrityError اگر نام تکراری باشد
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE contractors SET name = ? WHERE id = ?",
+            (name, contractor_id),
+        )
+        conn.commit()
+
+
+# ── رابطهٔ پروژه⇆پیمانکار (چرخهٔ حیات) ──────────────────────────────────────
+
+def link_contractor_to_project(
+    project_id: int,
+    contractor_id: int,
+    linked_by: int,
+    label: str | None = None,
+) -> int:
+    """
+    پیمانکار را به پروژه لینک می‌کند (وضعیت اولیه: active).
+    هم برای اولین لینک و هم برای «الحاق مجدد» بعد از خاتمه استفاده می‌شود —
+    چون partial unique index فقط مانع دو لینک *فعال* هم‌زمان می‌شود، نه
+    مانع رکورد جدید بعد از یک رکورد terminated قدیمی.
+
+    ورودی:
+        linked_by: telegram_id کاربری که لینک را ایجاد کرد
+        label:     برچسب اختیاری («الحاقیه»، «فاز ۲» ...)
+
+    خروجی:
+        id رکورد لینک تازه‌ساخته‌شده
+
+    خطا:
+        sqlite3.IntegrityError اگر این جفت از قبل لینک *فعال* داشته باشد
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO project_contractors
+                (project_id, contractor_id, label, status, linked_by, linked_at)
+            VALUES (?, ?, ?, 'active', ?, ?)
+            """,
+            (project_id, contractor_id, label, linked_by, _now_iso()),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_link_by_id(link_id: int) -> dict | None:
+    """
+    رکورد رابطهٔ پروژه⇆پیمانکار را به‌همراه نام پیمانکار و نام پروژه برمی‌گرداند.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT pc.*, c.name AS contractor_name, p.name AS project_name
+            FROM project_contractors pc
+            JOIN contractors c ON c.id = pc.contractor_id
+            JOIN projects p ON p.id = pc.project_id
+            WHERE pc.id = ?
+            """,
+            (link_id,),
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def list_contractor_links_by_project(
+    project_id: int, statuses: tuple[str, ...] | None = None
+) -> list[dict]:
+    """
+    فهرست رابطه‌های پیمانکار برای یک پروژه — به‌همراه نام پیمانکار.
+
+    ورودی:
+        statuses: اگر داده شود فقط این وضعیت‌ها (مثلاً ('active',))، وگرنه همه
+    """
+    with get_connection() as conn:
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            rows = conn.execute(
+                f"""
+                SELECT pc.*, c.name AS contractor_name
+                FROM project_contractors pc
+                JOIN contractors c ON c.id = pc.contractor_id
+                WHERE pc.project_id = ? AND pc.status IN ({placeholders})
+                ORDER BY c.name
+                """,
+                (project_id, *statuses),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT pc.*, c.name AS contractor_name
+                FROM project_contractors pc
+                JOIN contractors c ON c.id = pc.contractor_id
+                WHERE pc.project_id = ?
+                ORDER BY c.name
+                """,
+                (project_id,),
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
+def update_link_label(link_id: int, label: str | None) -> None:
+    """برچسب یک رابطهٔ پروژه⇆پیمانکار را تغییر می‌دهد (نه نام خود پیمانکار)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE project_contractors SET label = ? WHERE id = ?",
+            (label, link_id),
+        )
+        conn.commit()
+
+
+def terminate_link_direct(link_id: int, terminated_by: int) -> None:
+    """
+    خاتمهٔ مستقیم رابطه — فقط سطح ۱. بدون فلوی درخواست/تأیید.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE project_contractors
+            SET status = 'terminated', terminated_by = ?, terminated_at = ?
+            WHERE id = ? AND status = 'active'
+            """,
+            (terminated_by, _now_iso(), link_id),
+        )
+        conn.commit()
+
+
+def request_terminate_link(link_id: int, requested_by: int) -> None:
+    """
+    درخواست خاتمهٔ رابطه توسط سطح ۲ — نیاز به تأیید سطح ۱.
+    status: active -> pending_termination
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE project_contractors
+            SET status = 'pending_termination',
+                termination_requested_by = ?, termination_requested_at = ?
+            WHERE id = ? AND status = 'active'
+            """,
+            (requested_by, _now_iso(), link_id),
+        )
+        conn.commit()
+
+
+def approve_terminate_link(link_id: int, approved_by: int) -> None:
+    """تأیید سطح ۱ روی یک درخواست خاتمه. status: pending_termination -> terminated"""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE project_contractors
+            SET status = 'terminated', terminated_by = ?, terminated_at = ?
+            WHERE id = ? AND status = 'pending_termination'
+            """,
+            (approved_by, _now_iso(), link_id),
+        )
+        conn.commit()
+
+
+def reject_terminate_link(link_id: int, reason: str) -> None:
+    """
+    رد درخواست خاتمه توسط سطح ۱ — رابطه به حالت active برمی‌گردد.
+    دلیل رد ذخیره می‌شود تا به سطح ۲ نمایش داده شود.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE project_contractors
+            SET status = 'active', reject_reason = ?,
+                termination_requested_by = NULL, termination_requested_at = NULL
+            WHERE id = ? AND status = 'pending_termination'
+            """,
+            (reason, link_id),
+        )
+        conn.commit()
+
+
+def list_pending_termination_requests() -> list[dict]:
+    """
+    همهٔ درخواست‌های خاتمهٔ در انتظار تأیید (سراسری، برای صف سطح ۱).
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT pc.*, c.name AS contractor_name, p.name AS project_name
+            FROM project_contractors pc
+            JOIN contractors c ON c.id = pc.contractor_id
+            JOIN projects p ON p.id = pc.project_id
+            WHERE pc.status = 'pending_termination'
+            ORDER BY pc.termination_requested_at
+            """
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
+def is_link_active(project_id: int, contractor_id: int) -> bool:
+    """
+    آیا این جفت پروژه/پیمانکار در حال حاضر لینک فعال دارند؟
+    برای گیت کردن «ثبت فعالیت جدید» در ماژول‌های دیگر (جوش، آینده: رنگ/فیتینگ)
+    در نظر گرفته شده — در همین فاز جایی صدا زده نمی‌شود.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM project_contractors
+            WHERE project_id = ? AND contractor_id = ? AND status = 'active'
+            """,
+            (project_id, contractor_id),
+        ).fetchone()
+        return row is not None

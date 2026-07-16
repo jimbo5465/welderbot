@@ -216,3 +216,41 @@ def can_select_contractor(telegram_id: int, project_id: int, contractor_id: int)
 def can_grant_level3(telegram_id: int, project_id: int) -> bool:
     """آیا کاربر می‌تواند برای پیمانکارهای این پروژه، اپراتور سطح ۳ معرفی کند؟"""
     return can_manage_contractors(telegram_id, project_id)
+
+def get_my_project_ids(telegram_id: int) -> list[int] | None:
+    """
+    پروژه‌هایی که این کاربر حق دیدن‌شان را دارد.
+    خروجی None یعنی «همه» (سطح ۱). خروجی [] یعنی هیچ پروژه‌ای.
+    """
+    if get_effective_level(telegram_id) == LEVEL_PROJECT_MANAGER:
+        return None
+    grants = get_access_grants_by_telegram(telegram_id, active_only=True)
+    return sorted({g["project_id"] for g in grants if g["project_id"] is not None})
+
+
+def get_my_operator_contractor(telegram_id: int, project_id: int) -> int | None:
+    """برای سطح ۳: در این پروژه، فقط مجاز به کدام پیمانکار است؟"""
+    grants = get_access_grants_by_telegram(telegram_id, active_only=True)
+    for g in grants:
+        if g["level"] == LEVEL_OPERATOR and g["project_id"] == project_id:
+            return g["contractor_id"]
+    return None
+
+def get_my_contractor_id_for_project(telegram_id: int, project_id: int) -> int | None:
+    """
+    اگر کاربر در این پروژه محدود به یک پیمانکار خاص است (سطح ۳/اپراتور)،
+    همان contractor_id را برمی‌گرداند.
+
+    خروجی:
+        None → کاربر سطح ۱ یا ۲ است (همهٔ پیمانکاران این پروژه برایش مجازند)
+        int  → کاربر سطح ۳ است، فقط همین پیمانکار مجاز است
+    """
+    level_here = get_effective_level(telegram_id, project_id=project_id)
+    if level_here in (LEVEL_PROJECT_MANAGER, LEVEL_CONTRACTOR_MANAGER):
+        return None
+
+    grants = get_access_grants_by_telegram(telegram_id, active_only=True)
+    for g in grants:
+        if g["level"] == LEVEL_OPERATOR and g["project_id"] == project_id:
+            return g["contractor_id"]
+    return None
