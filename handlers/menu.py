@@ -111,29 +111,57 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 @require_auth
+
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+
     """
+
     هندلر دستور /cancel — هر مکالمه فعالی را پاک می‌کند و به منو برمی‌گردد.
+
     """
+
     try:
+
+        tg_user = update.effective_user
+
+
+
         # پاکسازی کامل داده‌های مکالمه
+
         context.user_data.clear()
 
+
+
         role = await ensure_user_registered(update, context)
+
         context.user_data["role"] = role
 
+
+
         msg = "❌ عملیات لغو شد.\n\n" + _MSG_BACK_TO_MENU
-        if update.message:
+
+        if update.message and tg_user:
+
             await update.message.reply_text(
+
                 msg,
-                reply_markup=main_menu_keyboard(role or ROLE_OPERATOR),
+
+                reply_markup=main_menu_keyboard(tg_user.id),
+
             )
 
+
+
         return ConversationHandler.END
 
+
+
     except Exception:
+
         logger.exception("خطا در cancel_command")
+
         return ConversationHandler.END
+
 
 
 def get_menu_handlers() -> list:

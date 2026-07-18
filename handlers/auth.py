@@ -28,48 +28,69 @@ ROLE_OPERATOR = "operator"
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_role(telegram_id: int) -> str | None:
+
     """
-    نقش کاربر را بر اساس telegram_id تعیین می‌کند.
+
+    نقش کاربر را بر اساس سطح دسترسی مؤثر او تعیین می‌کند.
+
+
+
+    فاز ۱۳ (یکی‌سازی): این تابع دیگر جدول قدیمی users را نمی‌خواند —
+
+    تنها منبع حقیقت access_grants (+ config.ADMIN_IDS) است. امضا و
+
+    خروجی ('admin'/'operator'/None) بدون تغییر مانده تا welders.py،
+
+    keyboards.py، menu.py و test_registration.py که به این تابع وابسته‌اند
+
+    بدون تغییر کار کنند.
+
+
 
     ورودی:
+
         telegram_id: شناسه تلگرام کاربر
 
+
+
     خروجی:
-        'admin' / 'operator' / None (اگر ثبت نشده یا غیرفعال باشد)
+
+        'admin'  اگر سطح ۱ (LEVEL_PROJECT_MANAGER) باشد
+
+        'operator' اگر سطح ۲ یا ۳ باشد
+
+        None اگر هیچ access_grant فعالی نداشته باشد
+
     """
-    # بررسی ADMIN_IDS از config — بدون نیاز به DB
-    if telegram_id in config.ADMIN_IDS:
-        return ROLE_ADMIN
 
-    # بررسی DB برای operator‌های ثبت‌شده (سیستم قدیمی نقش)
-    user = get_user_by_telegram_id(telegram_id)
-    if user and user.get("is_active") == 1:
-        return user.get("role")
+    level = get_effective_level(telegram_id)
 
-    # فاز ۸: کاربرانی که فقط از طریق access_grants دسترسی دارند و در
-    # جدول قدیمی users رکوردی ندارند، هم باید «ثبت‌شده» شناخته شوند —
-    # وگرنه با وجود داشتن access_grant معتبر، ربات همچنان به آن‌ها
-    # می‌گوید «حساب شما ثبت نشده».
-    # نکته: اینجا از get_access_grants_by_telegram مستقیم استفاده می‌کنیم
-    # (نه get_effective_level) چون در این نقطه هیچ project_id/contractor_id
-    # مشخصی در دست نیست — فقط می‌خواهیم بدانیم «آیا اصلاً هر نوع دسترسی
-    # فعالی دارد یا نه»، صرف‌نظر از محدوده‌اش.
-    grants = get_access_grants_by_telegram(telegram_id, active_only=True)
-    if grants:
-        has_level1 = any(g["level"] == LEVEL_PROJECT_MANAGER for g in grants)
-        return ROLE_ADMIN if has_level1 else ROLE_OPERATOR
+    if level is None:
 
-    return None
+        return None
+
+    return ROLE_ADMIN if level == LEVEL_PROJECT_MANAGER else ROLE_OPERATOR
+
+
+
 
 
 def is_admin(telegram_id: int) -> bool:
-    """بررسی می‌کند آیا کاربر نقش admin دارد."""
+
+    """بررسی می‌کند آیا کاربر سطح ۱ (مدیر سراسری) است."""
+
     return get_role(telegram_id) == ROLE_ADMIN
 
 
+
+
+
 def is_authenticated(telegram_id: int) -> bool:
-    """بررسی می‌کند آیا کاربر ثبت‌شده و فعال است (admin یا operator)."""
+
+    """بررسی می‌کند آیا کاربر حداقل یک access_grant فعال دارد (هر سطحی)."""
+
     return get_role(telegram_id) is not None
+
 
 
 async def _deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
