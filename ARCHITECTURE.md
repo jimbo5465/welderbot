@@ -241,6 +241,22 @@ ConversationHandler مستقل برای اعطای دسترسی. الگوی stat
 (بدون پشته back/cancel، شبیه `welders.py`) — نه الگوی پیچیده‌ی
 `test_registration.py`.
 
+
+فاز ۱۲ — تکمیل نقاط ورود سطح ۲ (کامل، تست‌شده روی VPS)
+
+درس این فاز
+
+get_effective_level(telegram_id, project_id=None, contractor_id=None)
+عمداً به‌گونه‌ای طراحی شده که بدون context (project_id/contractor_id)
+نمی‌تواند سطح ۲ یا ۳ را تشخیص دهد — این طراحی درست است چون سطح ۲/۳ ذاتاً
+scoped هستند. اما این یعنی هر کد جدیدی که بخواهد بپرسد «آیا این کاربر
+اصلاً سطح ۲ هست، در هر پروژه‌ای؟» باید مستقیم access_grants را بخواند،
+نه از get_effective_level بدون آرگومان استفاده کند — این دومی همیشه
+None می‌دهد و خطای بی‌صدا (نه Exception، فقط دکمهٔ نامرئی) تولید می‌کند.
+این یک الگوی خطای قابل‌تکرار است؛ برای فیچرهای آینده که «آیا کاربر سطح X
+در هر جایی هست؟» می‌پرسند، همین الگو (خواندن مستقیم grants) باید تکرار
+شود، نه فراخوانی بدون-context به get_effective_level.
+
 ### ⚠️ بدهی فنی باقی‌مانده
 `handlers/projects.py` و `handlers/contractors.py` هنوز ساخته نشده‌اند.
 باید دقیقاً از الگوی `handlers/welders.py` + `handlers/keyboards.py` پیروی
