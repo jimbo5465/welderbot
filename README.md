@@ -1,25 +1,76 @@
 # WelderBot
 
-WelderBot is a Telegram bot for managing **Welder Qualification Tests (WQT)** based on **ASME Section IX**.
+WelderBot is a Telegram bot for managing **Welder Qualification Tests (WQT)**
+based on **ASME Section IX**.
 
-The project is designed with a modular architecture so that each feature can be developed, tested and maintained independently.
+The project is designed with a modular architecture so that each feature can
+be developed, tested, and maintained independently.
 
 ---
 
-# Main Features
+## Main Features
 
 - Welder Management
-- WQT Registration
-- Contractor Management
+- WQT Registration (ASME Section IX)
+- Excel Certificate Export (official WPQ form)
+- Hierarchical Access Control (3 levels)
 - Project Management
+- Contractor Management (project ⇆ contractor relationship lifecycle)
 - Qualification History
-- Excel Certificate Export
 - Authentication & Authorization
 - SQLite Database
 
 ---
 
-# Technology Stack
+## Access Control
+
+Three access levels, each scoped to a defined boundary. Higher levels
+inherit the permissions of lower levels; the global admin
+(`config.ADMIN_IDS`) always has level 1 globally.
+
+| Level | Role | Scope |
+|---|---|---|
+| 1 | Global project manager | Global — create/edit/delete any project |
+| 2 | Contractor manager | Scoped to one project — add/edit/delete contractors within it |
+| 3 | Operator | Scoped to one contractor — register tests only |
+
+Access is granted from the main menu → "👥 مدیریت کاربران". A user must
+have sent `/start` at least once to appear in the selection list (table
+`pending_users`).
+
+Project–contractor relationship is many-to-many (a project can have
+multiple contractors), tracked in `project_contractors`.
+
+Project termination is soft and reversible: welder and qualification
+records stay intact, only new activity registration is blocked.
+
+Contractor management supports add / re-link / label / terminate per
+project. Termination requested by level 2 requires level-1 approval
+(via immediate Telegram notification) before taking effect.
+
+Access-level enforcement applies throughout the WQT registration flow:
+level 2 sees only their own projects, level 3 sees only their assigned
+contractor and skips the corresponding selection steps automatically.
+
+---
+
+## Project Structure
+welderbot/
+├── db/
+├── engine/
+├── forms/
+├── handlers/
+├── utils/
+├── media/
+├── logs/
+├── config.py
+├── main.py
+├── requirements.txt
+└── welderbot.service
+
+---
+
+## Technology Stack
 
 - Python 3
 - python-telegram-bot
@@ -30,27 +81,7 @@ The project is designed with a modular architecture so that each feature can be 
 
 ---
 
-# Project Structure
-
-```
-welderbot/
-├── db/
-├── engine/
-├── forms/
-├── handlers/
-├── utils/
-├── data/
-├── media/
-├── logs/
-├── config.py
-├── main.py
-├── requirements.txt
-└── welderbot.service
-```
-
----
-
-# Installation
+## Installation
 
 Create a virtual environment:
 
@@ -61,13 +92,11 @@ python -m venv .venv
 Activate it:
 
 Linux
-
 ```bash
 source .venv/bin/activate
 ```
 
 Windows
-
 ```bash
 .venv\Scripts\activate
 ```
@@ -80,26 +109,24 @@ pip install -r requirements.txt
 
 ---
 
-# Environment Variables
+## Environment Variables
 
-The project reads all sensitive values from Environment Variables.
+The project reads all sensitive values from environment variables.
 
-Required variables:
-
+Required:
 ```text
 BOT_TOKEN
 ADMIN_IDS
 ```
 
 Optional:
-
 ```text
 WELDERBOT_DEBUG
 ```
 
 ---
 
-# Run
+## Run
 
 ```bash
 python main.py
@@ -107,131 +134,48 @@ python main.py
 
 ---
 
-# Dependencies
+## Dependencies
 
 - python-telegram-bot
 - openpyxl
 - Pillow
 - jdatetime
 
-See:
-
-```
-requirements.txt
-```
-
-for exact versions.
+See `requirements.txt` for exact versions.
 
 ---
 
-# Architecture
+## Architecture
 
-Project architecture is documented in:
+Documented in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-```
-ARCHITECTURE.md
-```
+## Internal API
 
----
-
-# Internal API
-
-Stable APIs are documented in:
-
-```
-CONTRACTS.md
-```
+Stable internal APIs are documented in [`CONTRACTS.md`](./CONTRACTS.md).
 
 ---
 
-# Deployment
+## Deployment
 
-The project includes a ready-to-use systemd service.
-
-```
-welderbot.service
-```
-
-See:
-
-```
-RUN.md
-```
-
-for deployment instructions.
+The project includes a ready-to-use systemd service: `welderbot.service`.
+See `RUN.md` for deployment instructions.
 
 ---
 
-# License
+## Known Open Item
 
-## 🆕 فاز ۷ — خروجی Excel رسمی WPQ (در حال تکمیل)
+Excel WPQ export: core logic and bot wiring are complete and tested.
+Two items remain — see `ARCHITECTURE.md` and `CONTRACTS.md` for details:
+- A few secondary fields (progression, shielding gas, filler spec, etc.)
+  are not yet written to `extra_data` when a qualification is saved.
+- Plate sample thickness is not yet stored in the database.
 
-بعد از ثبت هر آزمون WQT، ربات می‌تواند فایل Excel رسمی (فرم WPQ شرکت) را
-خودکار پر کرده و برای اپراتور ارسال کند.
+---
 
-**وضعیت فعلی:** منطق اصلی و اتصال به ربات کامل و تست‌شده است.
-دو مورد باقی‌مانده:
-- تکمیل چند فیلد فرعی (`progression`, `shielding_gas`, `filler spec` و غیره)
-  در `extra_data` هنگام ذخیره صلاحیت (نیاز به Patch در `_build_qualification_payload`)
-- فیلد «ضخامت نمونه Plate» هنوز در دیتابیس ذخیره نمی‌شود
-
-جزئیات کامل در `CONTRACTS.md` بخش «engine/report_builder.py».
-
-## 🆕 فاز ۸ — سیستم دسترسی سلسله‌مراتبی (کامل)
-
-سه سطح دسترسی، هرکدام محدود به یک محدوده مشخص:
-
-| سطح | نام | محدوده |
-|---|---|---|
-| ۱ | مدیر پروژه | سراسری — می‌سازد/ویرایش/حذف پروژه |
-| ۲ | مدیر پیمانکار | محدود به یک پروژه مشخص — پیمانکار اضافه/ویرایش/حذف می‌کند |
-| ۳ | اپراتور | محدود به یک پیمانکار مشخص — فقط ثبت تست |
-
-سطوح بالاتر، سطوح پایین‌تر را هم دارند (ارث‌بری). ادمین کل (`config.ADMIN_IDS`)
-همیشه معادل سطح ۱ سراسری است.
-
-**رابط کاربری:** از منوی اصلی → «👥 مدیریت کاربران». کاربر مقصد باید حداقل
-یک‌بار `/start` زده باشد تا در فهرست انتخاب ظاهر شود (جدول `pending_users`).
-
-**تغییر ساختاری مهم:** رابطه‌ی پروژه⇆پیمانکار از «یک‌به‌چند» به «چند‌به‌چند»
-تغییر کرد (یک پروژه می‌تواند چند پیمانکار داشته باشد). جدول رابط:
-`project_contractors`.
-
-وضعیت: ✅ کامل و تست‌شده روی VPS.
-
-## 🆕 فاز ۹ — مدیریت پروژه (کامل و تست‌شده روی VPS)
-
-مدیر سراسری (سطح ۱) می‌تواند پروژه ایجاد/ویرایش‌نام/خاتمه/فعال‌سازی‌مجدد
-کند. خاتمهٔ پروژه soft است و قابل بازگشت؛ سوابق جوشکار و صلاحیت دست‌نخورده
-باقی می‌مانند، فقط ثبت فعالیت جدید مسدود می‌شود.
-
-## 🆕 فاز ۱۰ — مدیریت پیمانکار (در انتظار تست VPS)
-
-افزودن/الحاق‌مجدد/برچسب‌گذاری/خاتمهٔ همکاری پیمانکار در هر پروژه، با سطح
-دسترسی جداگانه برای مدیر سراسری و مدیر پروژه. خاتمهٔ همکاری توسط سطح ۲
-نیاز به تأیید سطح ۱ دارد (با اطلاع‌رسانی فوری تلگرام). جزئیات کامل در
-`CONTRACTS.md` بخش «فاز ۱۰».
-
-
-فاز ۱۱ — محدودسازی دسترسی در فرآیند ثبت آزمون (کامل و تست‌شده روی VPS)
-
-سطح‌بندی دسترسی (فاز ۸) اکنون واقعاً در فرآیند ثبت آزمون WQT اعمال
-می‌شود: سطح ۲ فقط پروژه‌های خودش، سطح ۳ فقط پیمانکار مشخص‌شدهٔ خودش را
-می‌بیند و برای سطح ۳ این مراحل خودکار رد می‌شوند. یک باگ قدیمی در فهرست
-پیمانکاران (که پیمانکار خاتمه‌یافته را همچنان فعال نشان می‌داد) هم در
-همین فاز رفع شد. جزئیات کامل در CONTRACTS.md بخش «فاز ۱۱».
-
- فاز ۱۳ — یکی‌سازی سیستم دسترسی (کامل و تست‌شده روی VPS)
-
-دو سیستم موازی تشخیص نقش کاربر (قدیمی role-based و جدید access_grants)
-یکی شدند — access_grants اکنون تنها منبع حقیقت است. یک باگ جانبی در
-/cancel هم در همین فاز رفع شد. جزئیات در CONTRACTS.md بخش «فاز ۱۳».
-
-با این فاز، بدهی‌های فنی شناسایی‌شده در فازهای ۱۱ و ۱۲ کاملاً بسته شدند؛
-تنها مورد باز باقی‌مانده تکمیل خروجی Excel فرم WPQ (فاز ۷) است.
+## License
 
 Private Project
 
-Copyright © Mohsen
+Copyright © [mohsen]
 
 All Rights Reserved.
