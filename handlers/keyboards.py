@@ -33,14 +33,35 @@ def main_menu_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     ]
 
     is_level1 = can_manage_projects(telegram_id)
-    # آیا کاربر حداقل در یک پروژه سطح ۲ (یا بالاتر) دارد؟
-    has_level2_somewhere = is_level1 or get_effective_level(telegram_id) == LEVEL_CONTRACTOR_MANAGER
+
+    # آیا کاربر حداقل در یک پروژه سطح ۲ دارد؟ (فاز ۱۲)
+
+    # نکتهٔ باگ قبلی: get_effective_level(telegram_id) بدون project_id همیشه
+
+    # None برای سطح ۲ برمی‌گرداند، چون تطبیق سطح ۲ در auth.py به project_id
+
+    # مشخص نیاز دارد. باید همهٔ access_grants کاربر را مستقیم چک کنیم.
+
+    from db.models import get_access_grants_by_telegram
+
+    _grants = get_access_grants_by_telegram(telegram_id, active_only=True)
+
+    is_level2_somewhere = any(g["level"] == LEVEL_CONTRACTOR_MANAGER for g in _grants)
+
+
 
     if is_level1:
+
         buttons.append([InlineKeyboardButton("🏗️ مدیریت پروژه‌ها",  callback_data="admin:projects")])
-    if has_level2_somewhere or is_level1:
+
+    if is_level1 or is_level2_somewhere:
+
         buttons.append([InlineKeyboardButton("⚙️ مدیریت پیمانکاران", callback_data="admin:contractors")])
+
+    if is_level1:
+
         buttons.append([InlineKeyboardButton("👥 مدیریت کاربران",    callback_data="admin:users")])
+
 
     return InlineKeyboardMarkup(buttons)
 
@@ -196,3 +217,79 @@ def grant_contractor_select_keyboard(contractors: list[dict]) -> InlineKeyboardM
     ]
     buttons.append([InlineKeyboardButton("❌ انصراف", callback_data="menu:main")])
     return InlineKeyboardMarkup(buttons)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# این بلوک را به handlers/keyboards.py اضافه کنید (فایل فعلی در اختیارم نبود،
+# پس این‌ها را به‌عنوان توابع مستقل و افزودنی نوشته‌ام — چیزی حذف/جایگزین نمی‌شود).
+# فرض: از InlineKeyboardButton / InlineKeyboardMarkup استفاده می‌شود، مطابق
+# الگوی welders_list_keyboard در همان فایل.
+# ══════════════════════════════════════════════════════════════════════════════
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+
+def projects_list_keyboard(projects: list[dict]) -> InlineKeyboardMarkup:
+    """
+    فهرست پروژه‌ها را به‌صورت دکمه نمایش می‌دهد.
+    پروژهٔ خاتمه‌یافته با ⛔ و پروژهٔ فعال با 📁 مشخص می‌شود.
+    بدون صفحه‌بندی — تعداد پروژه‌ها معمولاً کم است؛ اگر در آینده زیاد شد
+    از الگوی welders_list_keyboard (page/wldr_page) پیروی کنید.
+    """
+    rows = []
+    for p in projects:
+        icon = "📁" if p.get("is_active") else "⛔"
+        rows.append([
+            InlineKeyboardButton(f"{icon} {p['name']}", callback_data=f"proj:{p['id']}")
+        ])
+
+    rows.append([InlineKeyboardButton("➕ پروژه جدید", callback_data="proj_new")])
+    rows.append([InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def project_detail_keyboard(project: dict) -> InlineKeyboardMarkup:
+    """
+    دکمه‌های عملیاتی جزئیات یک پروژه.
+    اگر پروژه فعال است: ویرایش نام + خاتمه.
+    اگر خاتمه‌یافته است: فعال‌سازی مجدد.
+    """
+    project_id = project["id"]
+    rows = []
+
+    if project.get("is_active"):
+        rows.append([
+            InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"proj_edit:{project_id}"),
+        ])
+        rows.append([
+            InlineKeyboardButton("⛔ خاتمهٔ پروژه", callback_data=f"proj_term:{project_id}"),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton("♻️ فعال‌سازی مجدد", callback_data=f"proj_reactivate:{project_id}"),
+        ])
+
+    rows.append([InlineKeyboardButton("⬅️ بازگشت به فهرست پروژه‌ها", callback_data="admin:projects")])
+
+    return InlineKeyboardMarkup(rows)
+
+
+def management_submenu_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
+    """
+    زیرمنوی «⚙️ مدیریت» — فعلاً فقط دکمهٔ مدیریت پروژه فعال است.
+    مدیریت پیمانکار و مدیریت کاربران در فازهای بعدی به این تابع اضافه می‌شوند.
+
+    ⚠️ نکته: این تابع به can_manage_projects نیاز دارد — import آن را از
+    handlers.auth در بالای فایل keyboards.py اضافه کنید (در حال حاضر ممکن
+    است keyboards.py به auth.py وابسته نباشد — این یک وابستگی جدید است،
+    بررسی کنید که چرخهٔ import ایجاد نکند).
+    """
+    from handlers.auth import can_manage_projects  # noqa: E402  — نکتهٔ بالا را ببینید
+
+    rows = []
+    if can_manage_projects(telegram_id):
+        rows.append([InlineKeyboardButton("📁 مدیریت پروژه", callback_data="menu:projects")])
+
+    rows.append([InlineKeyboardButton("🏠 بازگشت به منو", callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
+
