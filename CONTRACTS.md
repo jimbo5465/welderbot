@@ -209,7 +209,50 @@ can_grant_level3(telegram_id, project_id) -> bool
 `main_menu_keyboard(telegram_id)` — دیگر `role` نمی‌گیرد، مستقیم `telegram_id`
 می‌گیرد و خودش سطح را تشخیص می‌دهد.
 
+فاز ۱۲ — دسترسی سطح ۲ به مدیریت پیمانکاران (کامل و تست‌شده روی VPS)
 
+بدهی فنی شناسایی‌شده در فاز ۱۱ رفع شد: کاربر سطح ۲ اکنون می‌تواند از منوی
+اصلی مستقیماً به فهرست پیمانکاران پروژهٔ خودش دسترسی داشته باشد (و از
+همان‌جا درخواست خاتمهٔ همکاری بدهد — فلوی تأیید سطح ۱ که در فاز ۱۰ ساخته
+شد، بدون تغییر).
+
+باگ ریشه‌ای که پیدا و رفع شد
+
+handlers/keyboards.py :: main_menu_keyboard از
+get_effective_level(telegram_id) بدون project_id برای تشخیص «آیا
+کاربر سطح ۲ است؟» استفاده می‌کرد. اما تطبیق سطح ۲ در
+auth.py::get_effective_level ذاتاً به project_id مشخص نیاز دارد
+(if project_id is not None and g["project_id"] == project_id) — بدون
+آن همیشه None برمی‌گشت. نتیجه: دکمهٔ «⚙️ مدیریت پیمانکاران» هرگز برای
+هیچ کاربر سطح ۲ ای نمایش داده نمی‌شد.
+
+تغییرات
+
+
+handlers/keyboards.py :: main_menu_keyboard — اکنون مستقیماً
+get_access_grants_by_telegram را می‌خواند و وجود حداقل یک grant سطح ۲
+فعال را چک می‌کند (صرف‌نظر از project_id خاص) تا دکمه را نشان دهد.
+دکمهٔ «👥 مدیریت کاربران» صراحتاً level1-only باقی ماند (تصمیم عمدی:
+اعطای دسترسی حساس است).
+handlers/contractors.py :: contractor_management_entry — دیگر
+_guard_level1 ندارد. سطح ۱ همهٔ پروژه‌ها (فعال+خاتمه‌یافته) را
+می‌بیند؛ سطح ۲ فقط پروژه‌های فعالی که در آن‌ها get_my_project_ids
+(فاز ۱۱) برایش project_id برمی‌گرداند.
+
+
+بدون تغییر
+
+show_contractors_menu, contractor_link_detail,
+terminate_link_ask/execute و بقیهٔ توابع فاز ۱۰ از قبل با
+can_manage_contractors(telegram_id, project_id) درست کار می‌کردند —
+چون در آن نقطه project_id همیشه مشخص است. فقط نقطهٔ ورود
+(contractor_management_entry) و نمایش دکمه در منو خراب بودند.
+
+بدهی فنی باقی‌مانده (بدون تغییر نسبت به فاز ۱۱)
+
+
+دو سیستم دسترسی موازی (role-based قدیمی + access_grants) هنوز هم‌زمان فعالند.
+فیلد «ضخامت نمونه Plate» و چند کلید extra_data فاز ۷ هنوز ناتمام‌اند.
 
 
 
