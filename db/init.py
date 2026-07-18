@@ -76,6 +76,103 @@ def _migrate_project_contractor_m2m(cur) -> None:
 
     cur.execute("PRAGMA foreign_keys = ON")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# این تابع را در db/init.py اضافه کنید — درست بعد از تعریف
+# _migrate_project_contractor_m2m (نه قبلش، چون به جدول project_contractors
+# که آن تابع می‌سازد وابسته است).
+#
+# دلیل نیاز به migration:
+#   جدول فعلی project_contractors کلید ترکیبی (project_id, contractor_id)
+#   دارد — یعنی فقط یک رکورد برای هر جفت پروژه/پیمانکار ممکن است. برای
+#   پشتیبانی از «خاتمه در یک پروژه» + «الحاق مجدد با برچسب» به این‌ها نیاز داریم:
+#     - id مستقل (چون باید چند رکورد تاریخی برای یک جفت مجاز باشد)
+#     - status (active / pending_termination / terminated)
+#     - label (متن آزاد — «الحاقیه»، «فاز ۲» و...)
+#     - ردیابی درخواست/تأیید/رد خاتمه
+#
+#   محدودیت «فقط یک لینک فعال برای هر جفت» با partial UNIQUE INDEX
+#   (WHERE status='active') در سطح دیتابیس تضمین می‌شود — نه فقط منطق پایتون.
+#
+# idempotent است — بررسی می‌کند ستون id از قبل هست یا نه، اجرای مکرر بی‌خطر.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _migrate_project_contractors_lifecycle(cur) -> None:
+    """
+    جدول project_contractors را از کلید ترکیبی ساده به مدل چرخهٔ‌حیات‌دار
+    (وضعیت/برچسب/تاریخچه) ارتقا می‌دهد. idempotent.
+    """
+    cols = [row[1] for row in cur.execute("PRAGMA table_info(project_contractors)").fetchall()]
+    if "id" in cols:
+        return  # قبلاً migrate شده
+
+    cur.execute("PRAGMA foreign_keys = OFF")
+
+    cur.execute("""
+        CREATE TABLE project_contractors_new (
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id                  INTEGER NOT NULL REFERENCES projects(id),
+            contractor_id               INTEGER NOT NULL REFERENCES contractors(id),
+            label                       TEXT,
+            status                      TEXT NOT NULL DEFAULT 'active'
+                                        CHECK (status IN ('active', 'pending_termination', 'terminated')),
+            linked_by                   INTEGER,
+            linked_at                   TEXT NOT NULL,
+            termination_requested_by    INTEGER,
+            termination_requested_at    TEXT,
+            terminated_by               INTEGER,
+            terminated_at               TEXT,
+            reject_reason               TEXT
+        )
+    """)
+
+    # انتقال رکوردهای موجود — همه به‌عنوان لینک «فعال» با تاریخ لینک نامعلوم
+    # (چون جدول قدیمی هیچ ستون تاریخی نداشت). این تنها فرض معقول است؛
+    # اگر می‌خواهید تاریخ دقیق‌تری ثبت شود باید دستی روی رکوردهای قدیمی اصلاح کنید.
+    cur.execute("""
+        INSERT INTO project_contractors_new
+            (project_id, contractor_id, status, linked_at)
+        SELECT project_id, contractor_id, 'active', datetime('now')
+        FROM project_contractors
+    """)
+
+    cur.execute("DROP TABLE project_contractors")
+    cur.execute("ALTER TABLE project_contractors_new RENAME TO project_contractors")
+
+    # فقط یک لینک «فعال» برای هر جفت پروژه/پیمانکار مجاز است —
+    # لینک‌های terminated متعدد برای همان جفت (تاریخچهٔ الحاق/خاتمه) مجاز است.
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_project_contractors_active_unique
+        ON project_contractors(project_id, contractor_id)
+        WHERE status = 'active'
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_project_contractors_contractor
+        ON project_contractors(contractor_id)
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_project_contractors_project
+        ON project_contractors(project_id)
+    """)
+
+    # برای صف درخواست‌های در انتظار تأیید سطح ۱
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_project_contractors_pending
+        ON project_contractors(status)
+        WHERE status = 'pending_termination'
+    """)
+
+    cur.execute("PRAGMA foreign_keys = ON")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# نقطهٔ فراخوانی — در init_db()، بلافاصله بعد از خط زیر اضافه کنید:
+#
+#     _migrate_project_contractor_m2m(cur)
+#     _migrate_project_contractors_lifecycle(cur)   # 🆕 همین خط را اضافه کنید
+#
+# ══════════════════════════════════════════════════════════════════════════════
 
 def init_db() -> None:
     """
@@ -132,6 +229,7 @@ def init_db() -> None:
 
         # ── migration: تبدیل رابطه projects/contractors به چند-به-چند (فاز ۸) ─
         _migrate_project_contractor_m2m(cur)
+        _migrate_project_contractors_lifecycle(cur)
 
         # ── جدول materials ───────────────────────────────────────────────────
         cur.execute("""

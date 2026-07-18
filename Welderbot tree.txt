@@ -74,3 +74,12 @@ handlers/
 db/
     models.py                  # ✏️ فاز ۸ — add_project/list_projects تغییر امضا دادند
     init.py                    # ✏️ فاز ۸ — جداول access_grants, pending_users, project_contractors
+
+
+handlers/
+    projects.py                # 🆕 فاز ۹ — مدیریت پروژه (ایجاد/ویرایش/خاتمه/فعال‌سازی)
+    contractors.py              # 🆕 فاز ۱۰ — مدیریت پیمانکار و رابطهٔ پروژه⇆پیمانکار
+db/
+    init.py                     # ✏️ فاز ۹ و ۱۰ — migration های project_contractors (lifecycle)
+    models.py                   # ✏️ فاز ۹ و ۱۰ — توابع چرخهٔ‌حیات پروژه و پیمانکار
+

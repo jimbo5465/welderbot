@@ -1,5 +1,5 @@
 """
-نقطه ورود WelderBot — فاز ۷ (نسخه نهایی).
+نقطه ورود WelderBot — فاز ۱۰ (مدیریت پیمانکار اضافه شد).
 این فایل فقط وظیفه سیم‌کشی (wiring) دارد:
   - راه‌اندازی logging
   - مقداردهی اولیه DB
@@ -31,11 +31,9 @@ _fmt = logging.Formatter(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# هندلر stdout — برای journalctl
 _stdout_handler = logging.StreamHandler(sys.stdout)
 _stdout_handler.setFormatter(_fmt)
 
-# هندلر فایل چرخشی — logs/welderbot.log حداکثر ۵ مگابایت، ۳ نسخه پشتیبان
 _file_handler = logging.handlers.RotatingFileHandler(
     filename=_LOG_DIR / "welderbot.log",
     maxBytes=5 * 1024 * 1024,
@@ -49,7 +47,6 @@ logging.basicConfig(
     handlers=[_stdout_handler, _file_handler],
 )
 
-# کاهش سر و صدای کتابخانه‌های شخص ثالث
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -69,16 +66,25 @@ from telegram.ext import (
 import config
 from db.init import init_db
 
-# handlers فاز ۵: منو، جوشکار CRUD
 from handlers.menu import get_menu_handlers
 from handlers.welders import (
     get_welder_conversation_handler,
     get_welder_plain_handlers,
 )
-
-# handler فاز ۶: ثبت آزمون WQT
 from handlers.test_registration import get_registration_conversation_handler
 from handlers.access_management import get_access_management_conversation_handler
+
+# فاز ۹: مدیریت پروژه
+from handlers.projects import (
+    get_project_conversation_handler,
+    get_project_plain_handlers,
+)
+
+# 🆕 فاز ۱۰: مدیریت پیمانکار
+from handlers.contractors import (
+    get_contractor_conversation_handler,
+    get_contractor_plain_handlers,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -86,11 +92,6 @@ from handlers.access_management import get_access_management_conversation_handle
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def global_error_handler(update: object, context) -> None:
-    """
-    خطاهای پردازش‌نشده را log می‌کند.
-    پیام کوتاه فارسی به کاربر ارسال می‌کند — بدون stack trace.
-    هرگز crash نمی‌کند.
-    """
     logger.exception(
         "خطای پردازش‌نشده | update=%s | خطا=%s",
         type(update).__name__,
@@ -104,7 +105,6 @@ async def global_error_handler(update: object, context) -> None:
                 "اگر مشکل ادامه داشت /start را بزنید."
             )
     except Exception:
-        # حتی ارسال پیام خطا هم ممکن است ناموفق باشد — ربات باید ادامه دهد
         logger.exception("خطا در ارسال پیام خطا به کاربر")
 
 
@@ -113,7 +113,6 @@ async def global_error_handler(update: object, context) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def unknown_message_handler(update: Update, context) -> None:
-    """پاسخ به پیام‌های متنی که در هیچ مکالمه‌ای نیستند."""
     await update.message.reply_text(
         "❓ این دستور شناخته نشد.\n"
         "برای شروع /start را بزنید."
@@ -121,7 +120,6 @@ async def unknown_message_handler(update: Update, context) -> None:
 
 
 async def unknown_callback_handler(update: Update, context) -> None:
-    """پاسخ به callback_data‌های ناشناخته."""
     if update.callback_query:
         await update.callback_query.answer(
             "⚠️ این دکمه دیگر معتبر نیست. لطفاً /start را بزنید.",
@@ -134,7 +132,6 @@ async def unknown_callback_handler(update: Update, context) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def help_command(update: Update, context) -> None:
-    """راهنمای مختصر دستورات ربات."""
     await update.message.reply_text(
         "📖 *راهنمای WelderBot*\n\n"
         "/start — شروع و منوی اصلی\n"
@@ -151,18 +148,6 @@ async def help_command(update: Update, context) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
-    """
-    WelderBot را راه‌اندازی می‌کند.
-
-    ترتیب عملیات:
-        ۱. نمایش بنر راه‌اندازی
-        ۲. اعتبارسنجی BOT_TOKEN
-        ۳. مقداردهی اولیه DB (fail-fast در صورت خطا)
-        ۴. ساخت Application
-        ۵. ثبت handlers (conversations → commands → callbacks → fallback)
-        ۶. شروع polling
-    """
-    # ── ۱. بنر راه‌اندازی ───────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info("در حال راه‌اندازی ربات WelderBot ...")
     logger.info("سطح لاگ: %s", logging.getLevelName(_log_level))
@@ -170,7 +155,6 @@ def main() -> None:
     logger.info("مسیر رسانه: %s", config.MEDIA_PATH)
     logger.info("=" * 60)
 
-    # ── ۲. اعتبارسنجی BOT_TOKEN ─────────────────────────────────────────────
     if not config.BOT_TOKEN or config.BOT_TOKEN == "PLACEHOLDER_BOT_TOKEN":
         print(
             "\n❌ خطا: متغیر محیطی BOT_TOKEN تنظیم نشده است.\n"
@@ -186,7 +170,6 @@ def main() -> None:
             "متغیر محیطی ADMIN_IDS را تنظیم کنید (مثال: export ADMIN_IDS=123456789)"
         )
 
-    # ── ۳. مقداردهی اولیه DB ────────────────────────────────────────────────
     logger.info("در حال مقداردهی اولیه پایگاه داده ...")
     try:
         init_db()
@@ -201,43 +184,47 @@ def main() -> None:
         )
         sys.exit(2)
 
-    # ── ۴. ساخت Application ─────────────────────────────────────────────────
     logger.info("در حال ساخت Application تلگرام ...")
     app = Application.builder().token(config.BOT_TOKEN).build()
 
-    # ── ۵. ثبت handlers (ترتیب حیاتی است) ──────────────────────────────────
     logger.info("در حال ثبت handlers ...")
 
-    # الف) هندلر خطای سراسری — ابتدا ثبت می‌شود
     app.add_error_handler(global_error_handler)
 
-    # ب) ConversationHandlers — باید قبل از CommandHandler و CallbackQueryHandler ثبت شوند
-    #    تا state‌های آن‌ها روی سایر هندلرها اولویت داشته باشند
-
-    # ثبت آزمون WQT (فاز ۶) — ۳۰ state — ConversationHandler(per_message=False)
     app.add_handler(get_registration_conversation_handler())
     logger.info("  ✓ ConversationHandler ثبت آزمون WQT ثبت شد (۳۰ state)")
 
-    # مدیریت جوشکاران (فاز ۵) — ConversationHandler(per_message=False)
     app.add_handler(get_welder_conversation_handler())
     logger.info("  ✓ ConversationHandler جوشکاران ثبت شد")
 
-    # مدیریت دسترسی (فاز ۸) — ConversationHandler(per_message=False)
     app.add_handler(get_access_management_conversation_handler())
     logger.info("  ✓ ConversationHandler مدیریت دسترسی ثبت شد")
 
-    # ج) CommandHandlers (/start، /cancel، /help)
+    app.add_handler(get_project_conversation_handler())
+    logger.info("  ✓ ConversationHandler مدیریت پروژه ثبت شد")
+
+    # 🆕 مدیریت پیمانکار (فاز ۱۰)
+    app.add_handler(get_contractor_conversation_handler())
+    logger.info("  ✓ ConversationHandler مدیریت پیمانکار ثبت شد")
+
     for handler in get_menu_handlers():
         app.add_handler(handler)
     app.add_handler(CommandHandler("help", help_command))
     logger.info("  ✓ CommandHandlers ثبت شدند (/start /cancel /help)")
 
-    # د) CallbackQueryHandlers مستقل (فهرست، جستجو، جزئیات جوشکار)
     for handler in get_welder_plain_handlers():
         app.add_handler(handler)
     logger.info("  ✓ CallbackQueryHandlers جوشکاران ثبت شدند")
 
-    # هـ) Fallback handlers — آخر از همه ثبت می‌شوند
+    for handler in get_project_plain_handlers():
+        app.add_handler(handler)
+    logger.info("  ✓ CallbackQueryHandlers مدیریت پروژه ثبت شدند")
+
+    # 🆕 CallbackQueryHandlers مستقل مدیریت پیمانکار
+    for handler in get_contractor_plain_handlers():
+        app.add_handler(handler)
+    logger.info("  ✓ CallbackQueryHandlers مدیریت پیمانکار ثبت شدند")
+
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -252,12 +239,11 @@ def main() -> None:
     logger.info("✅ تمام handlers ثبت شدند.")
     logger.info("ادمین‌های پیکربندی‌شده: %s", config.ADMIN_IDS or "هیچ‌کدام")
 
-    # ── ۶. شروع polling ─────────────────────────────────────────────────────
     logger.info("🚀 WelderBot در حال اجرا است. منتظر پیام‌ها...")
     logger.info("برای توقف Ctrl+C را بزنید.")
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,  # پیام‌های صف‌مانده هنگام offline نادیده گرفته می‌شوند
+        drop_pending_updates=True,
     )
 
 
