@@ -389,3 +389,38 @@ admin:projects و admin:contractors در منوی اصلی هر دو level1-only
 این فاز.
 
 
+فاز ۱۳ — یکی‌سازی سیستم دسترسی (کامل و تست‌شده روی VPS)
+
+دو سیستم دسترسی موازی (role-based قدیمی + access_grants فاز ۸) که در
+فاز ۱۱ به‌عنوان بدهی فنی ثبت شده بود، یکی شدند.
+
+تصمیم
+
+access_grants تنها منبع حقیقت برای تصمیمات دسترسی شد. جدول users
+دیگر در مسیر تصمیم‌گیری دسترسی خوانده نمی‌شود (همچنان برای نوشتن —
+ensure_user_registered هنوز ادمین‌ها را در آن ثبت می‌کند، بدون تغییر
+رفتار بیرونی؛ و test_registration.py هنوز برای نمایش نام از آن
+می‌خواند — این استفاده‌ها با تصمیمات دسترسی بی‌ربطند و دست نخوردند).
+
+handlers/auth.py — تغییر منطق داخلی (بدون تغییر امضا)
+
+get_role, is_admin, is_authenticated بازنویسی شدند تا فقط از
+get_effective_level (که خودش از access_grants می‌خواند) استفاده
+کنند، نه از get_user_by_telegram_id (جدول قدیمی users). چون امضا و
+مقدار خروجی این سه تابع بدون تغییر ماند، هیچ فایل دیگری
+(welders.py, keyboards.py, menu.py, test_registration.py) نیاز
+به تغییر نداشت — فقط همین یک فایل ویرایش شد.
+
+باگ جانبی رفع‌شده
+
+handlers/menu.py :: cancel_command — main_menu_keyboard را با
+مقدار role (رشتهٔ "admin"/"operator") صدا می‌زد، درحالی‌که این تابع
+telegram_id عددی می‌خواهد. tg_user هم اصلاً در تابع تعریف نشده بود.
+اصلاح شد: tg_user = update.effective_user به ابتدای تابع اضافه شد و
+main_menu_keyboard(tg_user.id) جایگزین شد.
+
+بدهی فنی باقی‌مانده
+
+
+فیلد «ضخامت نمونه Plate» و چند کلید extra_data باقی‌مانده از فاز ۷
+(خروجی Excel WPQ) هنوز ناتمام‌اند — تنها بدهی فنی شناخته‌شدهٔ باز.
