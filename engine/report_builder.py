@@ -14,7 +14,10 @@ from datetime import datetime
 
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as XLImage
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font
+
+# مقداری که به سایز فونت پیش‌فرض سلول (خوانده‌شده از خود template) اضافه می‌شود
+_VALUE_FONT_SIZE_BOOST = 2
 
 import config
 from db.models import get_qualification_by_id, get_welder_by_id
@@ -104,6 +107,22 @@ def _mark_test_result(ws, row: int, result_value: str | None) -> None:
     col = _RESULT_COLS[key]
     cell = ws[f"{col}{row}"]
     cell.value = f"✓ {label}"
+    _bold_value(ws, f"{col}{row}")
+
+
+def _bold_value(ws, coord: str, extra_size: int = _VALUE_FONT_SIZE_BOOST) -> None:
+    """
+    فونت یک سلولِ مقدار (نه لیبل) را بولد و کمی بزرگ‌تر می‌کند، بدون تغییر
+    فونت پایه‌ی template (رنگ/نام فونت template حفظ می‌شود).
+    """
+    cell = ws[coord]
+    base = cell.font
+    cell.font = Font(
+        name=base.name,
+        size=(base.size or 10) + extra_size,
+        bold=True,
+        color=base.color,
+    )
 
 
 def build_wpq_excel(qualification_id: int) -> str:
@@ -148,6 +167,8 @@ def build_wpq_excel(qualification_id: int) -> str:
     ws["M6"] = extra.get("wqt_no", "")
     ws["E7"] = extra.get("coupon_no", "")
     ws["M7"] = extra.get("wps_no", "")
+    for coord in ("E4", "M4", "E5", "M5", "E6", "M6", "E7", "M7"):
+        _bold_value(ws, coord)
 
     # ─── عکس جوشکار (P4:R7) ─────────────────────────────────────────────
     # نکته مهم: عکس‌های واقعی (موبایل) معمولاً چند هزار پیکسل هستند.
@@ -174,12 +195,22 @@ def build_wpq_excel(qualification_id: int) -> str:
     ws["G14"] = _fmt_dual_process(qual, "filler_gtaw", "filler_smaw", "sfa")
     ws["G15"] = qual.get("filler_aws_class", "")
     ws["G16"] = qual.get("deposit_groove_mm", "")
+    # M16: رنج تأیید ضخامت رسوب جوش = ۲× ضخامت واقعی نمونه (طبق QW-451).
+    # ⚠️ اگر سقف بالایی خاصی هم طبق استاندارد پروژه اعمال می‌شود، اینجا باید اضافه شود.
+    if qual.get("deposit_groove_mm"):
+        ws["M16"] = round(qual["deposit_groove_mm"] * 2, 2)
     ws["G17"] = qual.get("deposit_fillet_mm", "")
     ws["G18"] = qual.get("test_position", "");              ws["M18"] = f"{_fmt_list(qual.get('qr_position_groove'))} {_fmt_list(qual.get('qr_position_fillet'))}".strip()
     ws["G19"] = extra.get("progression", "")
+    ws["M19"] = extra.get("qr_progression", "")
     ws["G20"] = extra.get("shielding_gas", "")
     ws["G21"] = _fmt_dual_process(qual, "elec_gtaw", "elec_smaw", "current")
     ws["G22"] = _fmt_dual_process(qual, "elec_gtaw", "elec_smaw", "polarity")
+    for coord in (
+        "G9", "M9", "G10", "M10", "G11", "M11", "G12", "M12", "G13", "M13",
+        "G14", "G15", "G16", "M16", "G17", "G18", "M18", "G19", "M19", "G20", "G21", "G22",
+    ):
+        _bold_value(ws, coord)
 
     # ─── wrap + ارتفاع پویا برای جدول متغیرها (جلوگیری از overflow متن بلند) ───
     for row in _WRAP_ROWS:
@@ -209,9 +240,12 @@ def build_wpq_excel(qualification_id: int) -> str:
     signer_name = qual.get("signer_name") or ""
     signer_title = qual.get("signer_title") or ""
     ws["O31"] = f"{signer_name} — {signer_title}".strip(" —")
+    _bold_value(ws, "O31")
 
     # ─── امضای MAPNA-MD1 (NAME + DATE) ──────────────────────────────────
+    # نام امضاکننده با فونت بزرگ‌تر (هم‌سطح تیتر) و بولد نمایش داده می‌شود
     ws["I35"] = signer_name
+    _bold_value(ws, "I35", extra_size=4)
     ws["I37"] = qual.get("test_date", "")
 
     # ─── ذخیره خروجی ─────────────────────────────────────────────────────

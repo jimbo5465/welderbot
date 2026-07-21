@@ -18,6 +18,7 @@ from engine.report_builder import build_wpq_excel
 import logging
 import os
 from datetime import datetime
+from PIL import Image
 
 from telegram import (
     InlineKeyboardButton,
@@ -92,6 +93,7 @@ _engine = QualificationEngine()
     INPUT_WELDER_NATIONAL_ID,      # 6  [جدید] کد ملی
     INPUT_WELDER_PHONE,            # 7  [جدید] شماره تماس
     INPUT_WELDER_PHOTO,            # 8  [جدید] عکس
+    CONFIRM_WELDER_PHOTO,          # 8b [جدید] پیش‌نمایش/تأیید عکس کراپ‌شده
     ASK_ADDITIONAL_WELDER_INFO,    # 9  [جدید] افزودن اطلاعات تکمیلی؟
     INPUT_WELDER_ID_NO,            # 10 [جدید] Welder ID
     INPUT_COUPON_NO,               # 11 [جدید] Coupon No
@@ -143,7 +145,7 @@ _engine = QualificationEngine()
     PENDING_RT_EXPIRY,             # 57 [منوی جدا، فقط اگر ACC]
     PENDING_RT_SIGNER_NAME,        # 58 [منوی جدا، فقط اگر ACC]
     PENDING_RT_SIGNER_TITLE,       # 59 [منوی جدا، فقط اگر ACC]
-) = range(60)
+) = range(61)
 
 # ── کلید namespace در context.user_data ──────────────────────────────────────
 _NS = "wqt"
@@ -579,7 +581,7 @@ async def _render_select_contractor(q, context: ContextTypes.DEFAULT_TYPE) -> in
 
     await q.edit_message_text(
 
-        f"✅ پروژه: *{{_d(context)['project_name']}}*\n\n🏢 پیمانکار را انتخاب کنید:",
+        f"✅ پروژه: *{_d(context)['project_name']}*\n\n🏢 پیمانکار را انتخاب کنید:",
 
         parse_mode="Markdown", reply_markup=_contractors_kb(contractors),
 
@@ -787,7 +789,7 @@ async def step_welder_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         _d(context)["new_welder_phone"] = text
         _push(context, INPUT_WELDER_PHONE)
         _d(context)["_current_state"] = INPUT_WELDER_PHOTO
-        await update.message.reply_text("📷 عکس جوشکار را ارسال کنید (یا رد کنید):",
+        await update.message.reply_text("📷 لطفاً عکس جوشکار را با رعایت موارد زیر ارسال کنید:\n• نور کافی و یکنواخت\n• فاصله‌ی مناسب تا کادر شانه‌ها (نه خیلی نزدیک، نه خیلی دور)\n• ترجیحاً پس‌زمینه‌ی ساده و روشن",
                                          reply_markup=_skip_kb("skip:photo"))
         return INPUT_WELDER_PHOTO
     except Exception:
@@ -798,9 +800,19 @@ async def step_welder_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def _render_input_photo(q, context: ContextTypes.DEFAULT_TYPE) -> int:
     _d(context)["_current_state"] = INPUT_WELDER_PHOTO
-    await q.edit_message_text("📷 عکس جوشکار را ارسال کنید (یا رد کنید):",
+    await q.edit_message_text("📷 لطفاً عکس جوشکار را با رعایت موارد زیر ارسال کنید:\n• نور کافی و یکنواخت\n• فاصله‌ی مناسب تا کادر شانه‌ها (نه خیلی نزدیک، نه خیلی دور)\n• ترجیحاً پس‌زمینه‌ی ساده و روشن",
                                reply_markup=_skip_kb("skip:photo"))
     return INPUT_WELDER_PHOTO
+
+
+def _crop_photo_top(source_path: str, ratio: float = 0.55) -> str:
+    """تصویر را از بالا به نسبت مشخص کراپ می‌کند (سر+شانه در قاب می‌ماند)."""
+    img = Image.open(source_path)
+    w, h = img.size
+    cropped = img.crop((0, 0, w, int(h * ratio)))
+    crop_path = source_path.rsplit(".", 1)[0] + "_crop.jpg"
+    cropped.save(crop_path, "JPEG", quality=90)
+    return crop_path
 
 
 async def step_welder_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -813,18 +825,68 @@ async def step_welder_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             filename = f"{national}_{timestamp}.jpg"
             full_path = os.path.join(config.MEDIA_PATH, filename)
             await file.download_to_drive(full_path)
-            _d(context)["new_welder_photo"] = os.path.join("media", "photos", filename)
+
+            crop_path = _crop_photo_top(full_path)
+            _d(context)["_photo_original_path"] = full_path
+            _d(context)["_photo_crop_path"] = crop_path
+
+            with open(crop_path, "rb") as f:
+                await update.message.reply_photo(
+                    f,
+                    caption="این نسخه‌ی کراپ‌شده ذخیره خواهد شد. تأیید می‌کنید؟",
+                    reply_markup=_kb([
+                        [("✅ تأیید و ادامه", "photo:confirm")],
+                        [("🔄 گرفتن مجدد عکس", "photo:retake")],
+                    ], nav=False),
+                )
+            _d(context)["_current_state"] = CONFIRM_WELDER_PHOTO
+            return CONFIRM_WELDER_PHOTO
         else:
             await update.message.reply_text("⚠️ لطفاً تصویر ارسال کنید یا «رد کردن» را بزنید.",
                                              reply_markup=_skip_kb("skip:photo"))
             return INPUT_WELDER_PHOTO
-
-        _push(context, INPUT_WELDER_PHOTO)
-        return await _render_ask_additional_info(update.message, context)
     except Exception:
         logger.exception("خطا در step_welder_photo")
         await _err(update, "عکس جوشکار")
         return ConversationHandler.END
+
+
+async def step_confirm_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    crop_path = _d(context).get("_photo_crop_path")
+    if crop_path:
+        _d(context)["new_welder_photo"] = os.path.relpath(crop_path, config._PROJECT_ROOT)
+    _push(context, INPUT_WELDER_PHOTO)
+    # نکته: پیام مبدأ اینجا یک پیام عکسی است (پیش‌نمایش کراپ)، نه متنی —
+    # edit_message_text روی آن شکست می‌خورد؛ پس به‌جای _render_ask_additional_info
+    # (که سعی می‌کند edit کند)، یک پیام متنی تازه ارسال می‌شود.
+    _d(context)["_current_state"] = ASK_ADDITIONAL_WELDER_INFO
+    text = "➕ آیا می‌خواهید اطلاعات تکمیلی (Welder ID، Coupon No، WPS No، WQT No) وارد کنید؟"
+    kb = _kb([[("➕ بله", "addinfo:yes")], [("⏭ خیر", "addinfo:no")]])
+    await query.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+    return ASK_ADDITIONAL_WELDER_INFO
+
+
+async def step_retake_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    for key in ("_photo_original_path", "_photo_crop_path"):
+        p = _d(context).pop(key, None)
+        if p and os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                logger.warning("حذف فایل عکس قدیمی ناموفق بود: %s", p)
+    await query.message.reply_text(
+        "📷 لطفاً عکس جوشکار را با رعایت موارد زیر ارسال کنید:\n"
+        "• نور کافی و یکنواخت\n"
+        "• فاصله‌ی مناسب تا کادر شانه‌ها (نه خیلی نزدیک، نه خیلی دور)\n"
+        "• ترجیحاً پس‌زمینه‌ی ساده و روشن",
+        reply_markup=_skip_kb("skip:photo"),
+    )
+    _d(context)["_current_state"] = INPUT_WELDER_PHOTO
+    return INPUT_WELDER_PHOTO
 
 
 async def step_skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2560,6 +2622,7 @@ _STATE_RENDERERS = {
     INPUT_WELDER_NATIONAL_ID: _render_input_national_id,
     INPUT_WELDER_PHONE: _render_input_phone,
     INPUT_WELDER_PHOTO: _render_input_photo,
+    # CONFIRM_WELDER_PHOTO عمداً اینجا ثبت نشده (state پیام عکسی است، نه متنی)
     ASK_ADDITIONAL_WELDER_INFO: _render_ask_additional_info,
     INPUT_WELDER_ID_NO: _render_input_welder_id_no,
     INPUT_COUPON_NO: _render_input_coupon_no,
@@ -2630,6 +2693,10 @@ def get_registration_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.PHOTO, step_welder_photo),
                 CallbackQueryHandler(step_skip_photo, pattern=r"^skip:photo$"),
                 MessageHandler(filters.TEXT, step_welder_photo),
+            ],
+            CONFIRM_WELDER_PHOTO: [
+                CallbackQueryHandler(step_confirm_photo, pattern=r"^photo:confirm$"),
+                CallbackQueryHandler(step_retake_photo, pattern=r"^photo:retake$"),
             ],
             ASK_ADDITIONAL_WELDER_INFO: [CallbackQueryHandler(step_ask_additional_info, pattern=r"^addinfo:(yes|no)$")],
             INPUT_WELDER_ID_NO: [

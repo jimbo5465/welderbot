@@ -562,6 +562,10 @@ class QualificationEngine:
         # ── Progression (QW-405.3) ───────────────────────────────────────
         progression = self._calc_progression(test_position)
 
+        # طبق QW-405.3:
+        # تأیید با Uphill هر دو حالت Uphill و Downhill را پوشش می‌دهد.
+        qr_progression = "Uphill & Downhill" if progression == "Uphill" else None
+
         # ── Gas (QW-408) ──────────────────────────────────────────────────
         gas_result = self._calc_gas(process, joint_type, base_metal_p_no, inputs.get("shielding_gas"))
 
@@ -591,6 +595,7 @@ class QualificationEngine:
                 "gas":               gas_result,
                 "electrical":        electrical_result,
                 "progression":       progression,
+                "qr_progression":    qr_progression,
             },
         }
 
