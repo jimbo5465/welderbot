@@ -2211,10 +2211,21 @@ def _build_qualification_payload(context: ContextTypes.DEFAULT_TYPE, recorded_by
         "base_metal_material": d.get("base_metal_material"),
         "contractor_id": d.get("contractor_id"),
         "contractor_name": d.get("contractor_name"),
+        # فیلدهای زیر قبلاً در مکالمه ذخیره می‌شدند ولی هرگز به extra_data منتقل
+        # نمی‌شدند، در نتیجه در خروجی WPQ Excel همیشه خالی می‌ماندند.
+        "filler_gtaw": d.get("filler_gtaw"),
+        "filler_smaw": d.get("filler_smaw"),
+        "elec_gtaw": d.get("elec_gtaw"),
+        "elec_smaw": d.get("elec_smaw"),
+        "shielding_gas": d.get("shielding_gas"),
     })
 
     # deposit_groove_mm: برای حالت تک‌فرآیندی معادل ضخامت فلز پایه در نظر گرفته می‌شود
     deposit_groove_mm = d.get("base_metal_thickness_mm")
+
+    # ⚠️ فرض: وقتی هم GTAW هم SMAW ثبت شده باشند، GTAW (پاس ریشه) برای
+    # ستون خلاصه‌ی سطح‌بالا اولویت دارد.
+    _primary_filler = d.get("filler_gtaw") or d.get("filler_smaw") or {}
 
     return {
         "welder_id": d["welder_id"],
@@ -2223,8 +2234,8 @@ def _build_qualification_payload(context: ContextTypes.DEFAULT_TYPE, recorded_by
         "process": d["process"],
         "backing": "بدون backing",  # ستون CHECK باینری است؛ توضیح کامل در qr_backing ذخیره می‌شود
         "base_metal_p_no": d["base_metal_p_no"],
-        "filler_f_no": qr["filler_f_no_display"],
-        "filler_aws_class": None,
+        "filler_f_no": _primary_filler.get("f_no"),
+        "filler_aws_class": _primary_filler.get("designation"),
         "deposit_groove_mm": deposit_groove_mm,
         "deposit_fillet_mm": None,
         "pass_count": _resolve_pass_count(d),
