@@ -31,45 +31,55 @@ def get_role(telegram_id: int) -> str | None:
 
     """
 
-    نقش کاربر را بر اساس سطح دسترسی مؤثر او تعیین می‌کند.
+    نقش کاربر را بر اساس وجود هر نوع access_grant فعال تعیین می‌کند.
 
 
 
-    فاز ۱۳ (یکی‌سازی): این تابع دیگر جدول قدیمی users را نمی‌خواند —
+    فاز ۱۳.۱ (رفع رگرسیون): نسخهٔ قبلی این تابع از get_effective_level(telegram_id)
 
-    تنها منبع حقیقت access_grants (+ config.ADMIN_IDS) است. امضا و
+    بدون project_id/contractor_id استفاده می‌کرد — اما آن تابع عمداً طوری طراحی
 
-    خروجی ('admin'/'operator'/None) بدون تغییر مانده تا welders.py،
+    شده که بدون context، سطح ۲ و ۳ را هرگز تشخیص نمی‌دهد (چون تطبیق‌شان به
 
-    keyboards.py، menu.py و test_registration.py که به این تابع وابسته‌اند
+    project_id/contractor_id مشخص نیاز دارد). نتیجه: کاربران خالص سطح ۲/۳
 
-    بدون تغییر کار کنند.
+    (بدون هیچ grant سطح ۱) نمی‌توانستند اصلاً وارد ربات شوند.
 
 
 
-    ورودی:
+    این نسخه مستقیماً access_grants را می‌خواند — «آیا حداقل یک grant فعال
 
-        telegram_id: شناسه تلگرام کاربر
+    دارد؟» — بدون نیاز به context خاص.
 
 
 
     خروجی:
 
-        'admin'  اگر سطح ۱ (LEVEL_PROJECT_MANAGER) باشد
+        'admin'    اگر سطح ۱ باشد
 
-        'operator' اگر سطح ۲ یا ۳ باشد
+        'operator' اگر حداقل یک access_grant فعال دیگر (سطح ۲ یا ۳) داشته باشد
 
-        None اگر هیچ access_grant فعالی نداشته باشد
+        None       اگر هیچ access_grant فعالی نداشته باشد
 
     """
 
-    level = get_effective_level(telegram_id)
+    if telegram_id in config.ADMIN_IDS:
 
-    if level is None:
+        return ROLE_ADMIN
+
+
+
+    grants = get_access_grants_by_telegram(telegram_id, active_only=True)
+
+    if not grants:
 
         return None
 
-    return ROLE_ADMIN if level == LEVEL_PROJECT_MANAGER else ROLE_OPERATOR
+
+
+    has_level1 = any(g["level"] == LEVEL_PROJECT_MANAGER for g in grants)
+
+    return ROLE_ADMIN if has_level1 else ROLE_OPERATOR
 
 
 
@@ -90,6 +100,7 @@ def is_authenticated(telegram_id: int) -> bool:
     """بررسی می‌کند آیا کاربر حداقل یک access_grant فعال دارد (هر سطحی)."""
 
     return get_role(telegram_id) is not None
+
 
 
 

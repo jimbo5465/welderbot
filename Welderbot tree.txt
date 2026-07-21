@@ -1,85 +1,48 @@
-tree /root/welderbot
-/root/welderbot
-??? audit_imports.py
-??? config.py
-??? data
-?   ??? welderbot.db
-??? db
-?   ??? __init__.py
-?   ??? init.py
-?   ??? models.py
-?   ??? __pycache__
-?       ??? __init__.cpython-310.pyc
-?       ??? init.cpython-310.pyc
-?       ??? models.cpython-310.pyc
-??? ddfgfghghk\
-??? engine
-?   ??? __init__.py
-?   ??? __pycache__
-?   ?   ??? __init__.cpython-310.pyc
-?   ?   ??? qualification.cpython-310.pyc
-?   ??? qualification.py
-??? forms
-?   ??? __init__.py
-?   ??? __pycache__
-?   ?   ??? __init__.cpython-310.pyc
-?   ?   ??? wqt_excel.cpython-310.pyc
-?   ??? wqt_excel.py
-??? handlers
-?   ??? auth.py
-?   ??? __init__.py
-?   ??? keyboards.py
-?   ??? menu.py
-?   ??? __pycache__
-?   ?   ??? auth.cpython-310.pyc
-?   ?   ??? __init__.cpython-310.pyc
-?   ?   ??? keyboards.cpython-310.pyc
-?   ?   ??? menu.cpython-310.pyc
-?   ?   ??? test_registration.cpython-310.pyc
-?   ?   ??? welders.cpython-310.pyc
-?   ??? test_registration.py
-?   ??? test_registration.py.bak_1000
-?   ??? welders.py
-??? logs
-?   ??? welderbot.log
-??? main.py
-??? media
-?   ??? exports
-?   ??? photos
-?       ??? 0902415999_20260628142831.jpg
-?       ??? 0987654321_20260628144325.jpg
-??? __pycache__
-?   ??? config.cpython-310.pyc
-??? requirements.txt
-??? RUN.md
-??? utils
-?   ??? dates.py
-?   ??? __init__.py
-?   ??? __pycache__
-?   ?   ??? dates.cpython-310.pyc
-?   ?   ??? __init__.cpython-310.pyc
-?   ?   ??? validators.cpython-310.pyc
-?   ??? validators.py
-??? welderbot.db
-??? welderbot.service
-engine/
-    report_builder.py          # 🆕 فاز ۷ — تولید خروجی Excel
-media/
-    templates/
-        WPQ_template.xlsx      # 🆕 فاز ۷ — template اصلاح‌شده فرم WPQ
-16 directories, 46 files
-
-handlers/
-    access_management.py       # 🆕 فاز ۸ — مکالمه اعطای دسترسی
-db/
-    models.py                  # ✏️ فاز ۸ — add_project/list_projects تغییر امضا دادند
-    init.py                    # ✏️ فاز ۸ — جداول access_grants, pending_users, project_contractors
-
-
-handlers/
-    projects.py                # 🆕 فاز ۹ — مدیریت پروژه (ایجاد/ویرایش/خاتمه/فعال‌سازی)
-    contractors.py              # 🆕 فاز ۱۰ — مدیریت پیمانکار و رابطهٔ پروژه⇆پیمانکار
-db/
-    init.py                     # ✏️ فاز ۹ و ۱۰ — migration های project_contractors (lifecycle)
-    models.py                   # ✏️ فاز ۹ و ۱۰ — توابع چرخهٔ‌حیات پروژه و پیمانکار
-
+welderbot/
+├── main.py                          # نقطه ورود بات
+├── config.py                        # تنظیمات و متغیرهای محیطی
+├── requirements.txt
+├── RUN.md
+├── welderbot.service                # systemd unit برای اجرا روی VPS
+├── welderbot.db                     # دیتابیس اصلی (source of truth)
+│
+├── db/                               # لایه دیتابیس
+│   ├── __init__.py
+│   ├── init.py                      # ساخت جداول / migrations
+│   └── models.py                    # مدل‌ها و توابع CRUD (پروژه، پیمانکار، جوشکار، کاربر و ...)
+│
+├── engine/                           # لایه منطق کسب‌وکار
+│   ├── __init__.py
+│   ├── qualification.py             # محاسبه رنج‌های صلاحیت طبق ASME IX
+│   └── report_builder.py            # ساخت خروجی اکسل از روی qualification_id (بدون وابستگی به context مکالمه)
+│
+├── forms/
+│   ├── __init__.py
+│   └── wqt_excel.py                 # فرمت‌دهی سلول‌ها / منطق نمایش فرم WPQ
+│
+├── handlers/                         # لایه رابط تلگرام (مکالمات و کیبوردها)
+│   ├── __init__.py
+│   ├── auth.py                      # ورود و سطوح دسترسی
+│   ├── access_management.py         # اعطا/مدیریت سطوح دسترسی (سطح ۱/۲/۳)
+│   ├── menu.py
+│   ├── keyboards.py
+│   ├── projects.py                  # CRUD پروژه (ایجاد/ویرایش/خاتمه/فعال‌سازی)
+│   ├── contractors.py               # CRUD پیمانکار و رابطه پروژه⇆پیمانکار
+│   ├── test_registration.py         # فلوی ثبت آزمون جوشکار (ASME IX)
+│   └── welders.py
+│
+├── utils/
+│   ├── __init__.py
+│   ├── dates.py
+│   └── validators.py
+│
+├── media/
+│   ├── photos/                      # عکس‌های ثبت‌شده جوشکاران
+│   ├── exports/                     # خروجی‌های تولیدشده (اکسل و ...)
+│   └── templates/
+│       └── WPQ_template.xlsx        # قالب رسمی فرم WPQ
+│
+├── logs/
+│   └── welderbot.log
+│
+└── audit_imports.py
