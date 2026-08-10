@@ -575,7 +575,8 @@ async def ncr_date_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.callback_query.answer()
     today = jdatetime.date.today().strftime("%Y/%m/%d")
     context.user_data["ncr_date"] = today
-    return await _save_and_preview(update.callback_message, context)
+    msg = update.callback_query.message
+    return await _save_and_preview(msg, context)
 
 
 async def _save_and_preview(msg, context: ContextTypes.DEFAULT_TYPE) -> int:
