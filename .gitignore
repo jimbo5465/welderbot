@@ -1,0 +1,69 @@
+# Python
+
+__pycache__/
+
+*.py[cod]
+
+
+
+# Virtual Environment
+
+.venv/
+
+
+
+# Logs
+
+logs/
+
+*.log
+
+
+
+# Database
+
+*.db
+
+*.sqlite
+
+*.sqlite3
+
+data/*.db
+
+
+
+# Photos & Exports
+
+media/photos/
+
+media/exports/
+
+# عکس‌های گزارش‌های NCR (runtime)
+media/ncr_photos/
+
+
+
+# Environment
+
+.env
+
+# فایل سرویس systemd — شامل توکن/مسیر اختصاصی سرور است و نباید در گیت ثبت شود
+welderbot.service
+
+
+
+# IDE
+
+.vscode/
+
+.idea/
+
+
+
+# Backup
+
+backups/
+*.bak_*
+data/
+*.bak_*
+patch_*.py
