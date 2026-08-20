@@ -87,7 +87,8 @@ logger = logging.getLogger(__name__)
     KN_PHOTOS,             # عکس/مدرک
     KN_DATE,               # تاریخ ثبت
     KN_FINISH,             # ثبت نهایی + ساخت PDF/DOCX + ارسال
-) = range(16)
+    KN_TYPE_CONFIRM,       # تأیید نوع پس از پیشنهاد AI (تعارض طبقه‌بندی)
+) = range(17)
 
 _KEY_ENTRY_ID = "kn_entry_id"
 
@@ -107,6 +108,157 @@ def _clean_text(value: str | None, max_len: int) -> str | None:
     return t
 
 
+# ── تبدیل گفتار به متن (STT) — Groq Whisper ──────────────────────────────────
+
+_STT_TMP_DIR = "/tmp/welderbot_stt"
+
+
+async def _transcribe_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    """ویس/فایل صوتی تلگرام را دانلود و با Groq Whisper به متن تبدیل می‌کند.
+
+    خروجی: متن استخراج‌شده یا None در صورت خطا.
+    """
+    if not config.GROQ_API_KEY:
+        await update.message.reply_text(
+            "⚠️ تبدیل صدا به متن پیکربندی نشده است. لطفاً به‌جای ویس، متن بنویسید."
+        )
+        return None
+
+    import httpx
+
+    # ۱. پیدا کردن فایل صوتی (voice / audio / video note)
+    msg = update.message
+    file_id = None
+    if msg.voice:
+        file_id = msg.voice.file_id
+    elif msg.audio:
+        file_id = msg.audio.file_id
+    elif msg.video_note:
+        file_id = msg.video_note.file_id
+    elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("audio"):
+        file_id = msg.document.file_id
+
+    if not file_id:
+        await update.message.reply_text("❌ فایل صوتی شناخته‌شده‌ای پیدا نکردم. لطفاً ویس بفرستید یا متن بنویسید.")
+        return None
+
+    # ۲. دانلود فایل
+    try:
+        file = await context.bot.get_file(file_id)
+        os.makedirs(_STT_TMP_DIR, exist_ok=True)
+        tmp_path = os.path.join(_STT_TMP_DIR, f"voice_{update.effective_user.id}_{file_id[:20]}.ogg")
+        await file.download_to_drive(tmp_path)
+    except Exception:
+        logger.exception("خطا در دانلود فایل صوتی")
+        await update.message.reply_text("❌ دانلود فایل صوتی ناموفق بود. دوباره تلاش کنید یا متن بنویسید.")
+        return None
+
+    # ۳. ارسال به Groq Whisper
+    try:
+        url = f"{config.GROQ_STT_BASE_URL.rstrip('/')}/audio/transcriptions"
+        headers = {"Authorization": f"Bearer {config.GROQ_API_KEY}"}
+        with open(tmp_path, "rb") as f:
+            files = {"file": (os.path.basename(tmp_path), f, "audio/ogg")}
+            data = {"model": config.GROQ_STT_MODEL, "language": "fa", "response_format": "json"}
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(url, headers=headers, files=files, data=data)
+        if resp.status_code != 200:
+            logger.error("Groq STT خطا: %s — %s", resp.status_code, resp.text[:200])
+            await update.message.reply_text(
+                f"❌ تبدیل صدا ناموفق بود (کد {resp.status_code}). لطفاً دوباره ویس بفرستید یا متن بنویسید."
+            )
+            return None
+        text = (resp.json().get("text") or "").strip()
+        if not text:
+            await update.message.reply_text("❌ صدایی تشخیص داده نشد. لطفاً واضح‌تر صحبت کنید یا متن بنویسید.")
+            return None
+        return text
+    except Exception:
+        logger.exception("خطا در Groq STT")
+        await update.message.reply_text("❌ خطا در تبدیل صدا به متن. لطفاً دوباره تلاش کنید یا متن بنویسید.")
+        return None
+    finally:
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+async def kn_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """هندلر سراسری ویس/فایل صوتی در مکالمهٔ ثبت دانش.
+
+    بسته به state فعلی (که از context.user_data قابل تشخیص است) متن تبدیل‌شده
+    را به همان handler متنی می‌دهد.
+    """
+    text = await _transcribe_voice(update, context)
+    if text is None:
+        return ConversationHandler.END
+
+    # حالت فعلی از context.user_data
+    mode = context.user_data.get("kn_mode")
+    current_field = context.user_data.get("kn_current_field")
+
+    # شبیه‌سازی پیام متنی برای handler های موجود
+    original_text = update.message.text
+    update.message.text = text
+
+    try:
+        if current_field:
+            # در حال پاسخ به فیلد ناقص
+            result = await kn_field_answer(update, context)
+            return result
+        if mode == "interview":
+            # در حال مصاحبه با AI
+            result = await kn_interview_loop_text(update, context)
+            return result
+        # حالت‌های دستی: نام/سمت/شرح
+        if not context.user_data.get("kn_reporter_name"):
+            result = await kn_reporter_name(update, context)
+            return result
+        if not context.user_data.get("kn_reporter_title"):
+            result = await kn_reporter_title(update, context)
+            return result
+        if not context.user_data.get("kn_description"):
+            result = await kn_description(update, context)
+            return result
+        # پیش‌فرض: مصاحبه
+        result = await kn_interview_loop_text(update, context)
+        return result
+    finally:
+        update.message.text = original_text
+
+
+def _voice_handler_for(target_handler):
+    """Factory: یک هندلر ویس می‌سازد که صدا را به متن تبدیل و به target_handler می‌دهد."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        text = await _transcribe_voice(update, context)
+        if text is None:
+            return ConversationHandler.END
+        update.message.text = text
+        try:
+            return await target_handler(update, context)
+        finally:
+            pass
+    return wrapper
+
+
+class _AudioMessageFilter(filters.MessageFilter):
+    """فیلتر پیام‌های صوتی: voice / audio / video_note / document صوتی."""
+
+    def filter(self, message):
+        if not message:
+            return False
+        if message.voice or message.audio or message.video_note:
+            return True
+        if message.document and message.document.mime_type:
+            return message.document.mime_type.startswith("audio")
+        return False
+
+
+AUDIO_MESSAGE_FILTER = _AudioMessageFilter()
+
+
 def _mode_select_keyboard(ai_available: bool) -> InlineKeyboardMarkup:
     """زیرمنوی انتخاب روش ثبت دانش."""
     rows: list[list[InlineKeyboardButton]] = [
@@ -124,6 +276,50 @@ def _mode_select_keyboard(ai_available: bool) -> InlineKeyboardMarkup:
         ])
     rows.append([InlineKeyboardButton("🏠 منو", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
+
+
+def _type_buttons() -> list[list[InlineKeyboardButton]]:
+    """دکمه‌های انتخاب نوع دانش (درس‌آموخته / پیشنهاد / دانش صریح)."""
+    return [
+        [InlineKeyboardButton(label, callback_data=f"kn_type:{key}")]
+        for key, label in TYPE_LABELS.items()
+    ]
+
+
+def _type_conflict_keyboard(recommended: str) -> InlineKeyboardMarkup:
+    """کیبورد پیشنهاد طبقه‌بندی AI وقتی با انتخاب اپراتور تعارض دارد."""
+    rows = [[InlineKeyboardButton("✅ انتخاب من را نگه دار", callback_data="kn_type_keep")]]
+    if recommended in TYPE_LABELS:
+        rows.append([InlineKeyboardButton(
+            f"🔄 تغییر به «{TYPE_LABELS[recommended]}»",
+            callback_data=f"kn_type_switch:{recommended}",
+        )])
+    rows.append([InlineKeyboardButton("🏠 منو", callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _field_skip_keyboard() -> InlineKeyboardMarkup:
+    """دکمهٔ رد کردن فیلد جاری (اختیاری بودن فیلدها)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏭ رد کردن این فیلد", callback_data="kn_skip_field")],
+    ])
+
+
+def _impact_keyboard() -> InlineKeyboardMarkup:
+    """انتخاب دکمه‌ای «تاثیر اجرای پیشنهاد» (کیفی/کمی)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📈 کیفی", callback_data="kn_impact:کیفی"),
+            InlineKeyboardButton("🔢 کمی", callback_data="kn_impact:کمی"),
+        ],
+    ])
+
+
+def _skip_title_keyboard() -> InlineKeyboardMarkup:
+    """دکمهٔ رد کردن سمت گزارش‌دهنده (اختیاری)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏭ رد کردن (سمت ندارد)", callback_data="kn_skip:title")],
+    ])
 
 
 def _interview_start_keyboard() -> InlineKeyboardMarkup:
@@ -455,6 +651,8 @@ async def kn_mode_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "✍️ *روش دستی*\n\n"
             "در این روش شما متن آمادهٔ تجربه/دانش خود را وارد میکنید؛ ربات آن را "
             "به فیلدهای DANA تبدیل میکند و فیلدهای ناقص را جداگانه میپرسد.\n\n"
+            "🎙️ *راهنما:* میتوانید بهجای تایپ، ویس بفرستید — فارسی صحبت کنید و "
+            "صدای شما توسط هوش مصنوعی به متن تبدیل میشود.\n\n"
             "📚 نوع دانش را انتخاب کنید:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(_type_buttons()),
@@ -491,6 +689,8 @@ async def kn_mode_interview(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.edit_message_text(
             "🎙️ *مصاحبه با AI*\n\n"
             "AI با آگاهی از ساختار استاندارد DANA سؤال میپرسد و اطلاعات را جمع‌آوری میکند.\n\n"
+            "🎙️ *راهنما:* میتوانید بهجای تایپ، ویس بفرستید — فارسی صحبت کنید و "
+            "صدای شما توسط هوش مصنوعی به متن تبدیل میشود.\n\n"
             "📚 ابتدا نوع دانش را انتخاب کنید:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(_type_buttons()),
@@ -566,7 +766,10 @@ async def kn_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         lines.append("")
         lines.append("برای شروع، دکمهٔ زیر را بزنید.")
         await update.callback_query.edit_message_text(
-            "\n".join(lines),
+            "📚 چارچوب راهنما — " + TYPE_LABELS[value] + "\n\n"
+            "🎙️ *راهنما:* می‌توانید به‌جای تایپ، ویس بفرستید — فارسی صحبت کنید و "
+            "صدای شما توسط هوش مصنوعی به متن تبدیل می‌شود.\n\n"
+            + "\n".join(lines[1:]),
             reply_markup=_interview_start_keyboard(),
         )
         return KN_INTERVIEW_FRAMEWORK
@@ -576,6 +779,8 @@ async def kn_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"نوع: *{TYPE_LABELS[value]}*\n\n"
         "✍️ تجربه/دانش خود را آزادانه شرح دهید — هرچه جزئیات بیشتر باشد "
         "استخراج فیلدها دقیق‌تر است.\n"
+        "🎙️ *راهنما:* می‌توانید به‌جای تایپ، ویس بفرستید — فارسی صحبت کنید و "
+        "صدای شما توسط هوش مصنوعی به متن تبدیل می‌شود.\n"
         f"(حداکثر {_MAX_DESC} کاراکتر)",
         parse_mode="Markdown",
     )
@@ -1176,7 +1381,16 @@ async def kn_interview_loop_text(update: Update, context: ContextTypes.DEFAULT_T
             )
             return await _final_assemble_and_preview(context, update.message)
 
-        ask = result.get("ask") or "ادامه بدهید."
+        ask = result.get("ask")
+        if not ask:
+            # هیچ سؤالی ساخته نشد — احتمالاً LLM به‌کل شکست خورده؛ به‌جای پیام
+            # بی‌هدف «ادامه بدهید»، به کاربر اطلاع بده و بگذار ادامه دهد/خاتمه دهد.
+            await update.message.reply_text(
+                "⚠️ هوش مصنوعی نتوانست سؤال بعدی را بسازد. "
+                "لطفاً پاسخ خود را کامل‌تر بنویسید، یا «✓ پایان مصاحبه» را بزنید.",
+                reply_markup=_interview_continue_keyboard(),
+            )
+            return KN_INTERVIEW_LOOP
         # ثبت فیلدهای استخراج‌شده از این پاسخ
         extracted = result.get("extracted")
         if extracted:
@@ -2097,18 +2311,26 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
             KN_TYPE: [
                 CallbackQueryHandler(kn_type, pattern=r"^kn_type:(lesson|suggestion|explicit)$"),
             ],
+            KN_TYPE_CONFIRM: [
+                CallbackQueryHandler(kn_type_keep, pattern=r"^kn_type_keep$"),
+                CallbackQueryHandler(kn_type_switch, pattern=r"^kn_type_switch:(lesson|suggestion|explicit)$"),
+            ],
             KN_REPORTER_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_reporter_name),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_reporter_name)),
             ],
             KN_REPORTER_TITLE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_reporter_title),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_reporter_title)),
                 CallbackQueryHandler(kn_reporter_title_skip, pattern=r"^kn_skip:title$"),
             ],
             KN_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_description),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_description)),
             ],
             KN_FIELD_ANSWER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_field_answer),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_field_answer)),
                 CallbackQueryHandler(kn_field_skip, pattern=r"^kn_skip_field$"),
                 CallbackQueryHandler(kn_impact, pattern=r"^kn_impact:(کیفی|کمی)$"),
             ],
@@ -2117,6 +2339,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
             ],
             KN_INTERVIEW_LOOP: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_interview_loop_text),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_interview_loop_text)),
                 CallbackQueryHandler(kn_interview_done, pattern=r"^kn_interview:done$"),
             ],
             KN_FINAL_ASSEMBLE: [
@@ -2132,6 +2355,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_org_done, pattern=r"^kn_org:done$"),
                 CallbackQueryHandler(kn_org_skip, pattern=r"^kn_org:skip$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_org_text_input),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_org_text_input)),
             ],
             KN_TREE: [
                 CallbackQueryHandler(kn_tree_ai, pattern=r"^kn_tree:ai$"),
@@ -2142,6 +2366,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_tree_type, pattern=r"^kn_tree:type$"),
                 CallbackQueryHandler(kn_tree_skip, pattern=r"^kn_tree:skip$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_tree_type_done),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_tree_type_done)),
             ],
             KN_PREVIEW: [
                 CallbackQueryHandler(kn_finish, pattern=r"^kn_finish$"),
@@ -2153,6 +2378,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(kn_edit_field, pattern=r"^kn_edit:field:\w+$"),
                 CallbackQueryHandler(kn_edit_btn_choice, pattern=r"^kn_edit:btn:.+$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_edit_text_input),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_edit_text_input)),
             ],
             KN_PHOTOS: [
                 MessageHandler(filters.PHOTO, kn_photo_received),
@@ -2160,6 +2386,7 @@ def get_knowledge_conversation_handler() -> ConversationHandler:
             ],
             KN_DATE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, kn_date),
+                MessageHandler(AUDIO_MESSAGE_FILTER, _voice_handler_for(kn_date)),
                 CallbackQueryHandler(kn_date_today, pattern=r"^kn_today$"),
             ],
         },

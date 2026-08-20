@@ -71,10 +71,10 @@ KNOWLEDGE_AI_BASE_URL: str = os.environ.get(
     "KNOWLEDGE_AI_BASE_URL", "https://opencode.ai/zen/go/v1"
 )
 
-# کلید: اول KNOWLEDGE_AI_API_KEY، سپس OPENCODE_API_KEY (کلید OpenCode Go/Zen)
+# کلید: اول KNOWLEDGE_AI_API_KEY، سپس OPENCODE_GO_API_KEY (کلید OpenCode Go)
 KNOWLEDGE_AI_API_KEY: str = os.environ.get(
     "KNOWLEDGE_AI_API_KEY",
-    os.environ.get("OPENCODE_API_KEY", ""),
+    os.environ.get("OPENCODE_GO_API_KEY", ""),
 )
 
 # نام مدل — باید دقیقاً با یکی از شناسه‌های /v1/models نقطه انتهایی یکی باشد.
@@ -85,6 +85,13 @@ KNOWLEDGE_AI_MODEL: str = os.environ.get("KNOWLEDGE_AI_MODEL", "")
 
 # حداکثر زمان انتظار برای پاسخ مدل (ثانیه)
 KNOWLEDGE_AI_TIMEOUT: float = float(os.environ.get("KNOWLEDGE_AI_TIMEOUT", "60"))
+
+# ─── تبدیل گفتار به متن (STT) — Groq Whisper ─────────────────────────────────
+# برای ثبت دانش: کاربر می‌تواند به‌جای تایپ، ویس بفرستد و ربات با
+# whisper-large-v3-turbo روی Groq آن را به متن فارسی تبدیل می‌کند.
+GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
+GROQ_STT_MODEL: str = os.environ.get("GROQ_STT_MODEL", "whisper-large-v3-turbo")
+GROQ_STT_BASE_URL: str = os.environ.get("GROQ_STT_BASE_URL", "https://api.groq.com/openai/v1")
 
 # ─── ایجاد خودکار پوشه‌های runtime در زمان import ────────────────────────────
 

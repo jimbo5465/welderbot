@@ -52,7 +52,7 @@ INTERVIEW_FRAMEWORKS: dict[str, list[str]] = {
     ],
 }
 
-_MAX_JSON_RETRIES = 1
+_MAX_JSON_RETRIES = 3
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -178,12 +178,16 @@ def build_tree_suggestion_system_prompt(knowledge_type: str) -> str:
 async def _call_llm_json(messages: list[dict]) -> dict:
     """
     فراخوانی LLM و پارس پاسخ به dict.
-    در صورت خطا یا JSON نامعتبر، یکبار retry میکند؛ در نهایت {} برمیگرداند.
+    در صورت خطا یا JSON نامعتبر، تا _MAX_JSON_RETRIES بار retry میکند؛
+    در نهایت اگر همه شکست خوردند، یک dict حداقلی با ask ساخته‌شده از آخرین
+    پاسخ خام مدل برمیگرداند (به‌جای {} خالی) تا کاربر «ادامه بدهید» بی‌هدف نبیند.
     """
     last_err: Exception | None = None
+    last_content: str | None = None
     for attempt in range(_MAX_JSON_RETRIES + 1):
         try:
-            content = await _call_llm_messages(messages, temperature=0.2, max_tokens=1500)
+            content = await _call_llm_messages(messages, temperature=0.2, max_tokens=4096)
+            last_content = content
             parsed = _parse_json_response(content)
             if isinstance(parsed, dict):
                 return parsed
@@ -193,6 +197,13 @@ async def _call_llm_json(messages: list[dict]) -> dict:
             logger.warning("خطا در فراخوانی LLM (attempt %d): %s", attempt + 1, exc)
     if last_err is not None:
         logger.error("شکست همهٔ تلاش‌ها: %s", last_err)
+    # fallback: از متن خام مدل یک ask ساده بساز
+    if last_content:
+        text = (last_content or "").strip()
+        # کوتاه و مرتب کن — هر چیز غیر از JSON
+        text = text.replace("```", "").replace("json", "", 1).strip()
+        if text and len(text) < 500:
+            return {"ask": text}
     return {}
 
 
@@ -291,6 +302,29 @@ async def interview_next_turn(
         }
 
     result = _normalize_interview_response(parsed)
+
+    # اگر AI سؤالی نساخت (پاسخ خالی/ناقص)، از فیلدهای پرشده‌نشده سؤال هدفمند بساز
+    if not result.get("ask"):
+        # فیلدهای پر شده تا الان (از تاریخچه استخراج نشده‌اند — از پارس پاسخها)
+        # بهتر: از روی فیلدهای ناقص فریمورک، سؤال بعدی را پیشنهاد بده
+        filled = set()
+        for entry in history:
+            content = entry.get("content") or ""
+            if entry.get("role") == "assistant" and "extracted" in content:
+                continue
+        # از آخرین پاسخ استخراج‌شده استفاده کن
+        last_extracted = result.get("extracted") or {}
+        for k in last_extracted:
+            filled.add(k)
+        # فیلدهای باقی‌مانده از فریمورک
+        fields_framework = INTERVIEW_FRAMEWORKS.get(knowledge_type, [])
+        remaining = [k for k in fields_framework if k not in filled]
+        if remaining:
+            next_key = remaining[0]
+            label = FIELD_SCHEMAS.get(knowledge_type, {}).get(next_key, next_key)
+            result["ask"] = f"لطفاً «{label}» را توضیح دهید:"
+        else:
+            result["ask"] = "به نظر می‌رسد همهٔ فیلدهای کلیدی پر شده‌اند. اگر مورد دیگری هست بگویید، یا «✓ پایان مصاحبه» را بزنید."
     return result
 
 

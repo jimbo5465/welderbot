@@ -154,7 +154,73 @@ def _parse_json_response(content: str) -> dict:
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
         text = text[start:end + 1]
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # تلاش برای ترمیم JSON ناقص (مدل وسط JSON قطع شده)
+        repaired = _repair_truncated_json(text)
+        if repaired is not None:
+            return repaired
+        # اگر ترمیم نشد، خطای اصلی را بده تا caller با fallback برخورد کند
+        raise
+
+
+def _repair_truncated_json(text: str) -> dict | None:
+    """ترمیم JSON ناقص: رشتهٔ باز را می‌بندد یا کلید-مقدار بریده را حذف می‌کند."""
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return None
+
+    # اسکن سبک: عمق {} و وضعیت رشته و آخرین کامای سطح ۱ را ردگیری کن
+    depth = 0
+    in_string = False
+    escape = False
+    cut = -1  # آخرین نقطهٔ امن برای برش (کامای سطح ۱)
+    for i, ch in enumerate(stripped):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == "," and depth == 1:
+            cut = i
+
+    if in_string:
+        # آخرین رشته باز مانده — آخرین کلید-مقدار کامل را نگه دار و بقیه را دور بریز
+        if cut != -1:
+            candidate = stripped[:cut].rstrip()
+            if candidate.endswith(","):
+                candidate = candidate[:-1].rstrip()
+            candidate += "}"
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+        # اگر cut نبود (اولین/فقط کلید هم وسطش بریده)، رشته را ببند و } اضافه کن
+        candidate = stripped + '"}'
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+        return None
+
+    if depth > 0:
+        # چند سطح } کم دارد — اضافه کن
+        candidate = stripped + "}" * depth
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
 def _fallback_title(knowledge_type: str, raw_text: str, fields: dict) -> str:
@@ -272,7 +338,7 @@ async def _call_llm_messages(
     messages: list[dict],
     *,
     temperature: float = 0.2,
-    max_tokens: int = 700,
+    max_tokens: int = 4096,
 ) -> str:
     """
     فراخوانی chat completions با لیست پیام کامل (system + history + user).
