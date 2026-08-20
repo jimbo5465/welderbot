@@ -89,6 +89,9 @@ from handlers.contractors import (
 # 🆕 فاز NCR: ثبت گزارش عدم انطباق
 from handlers.ncr import get_ncr_conversation_handler
 
+# 🆕 فاز دانش سازمانی: ثبت دانش/تجربه
+from handlers.knowledge import get_knowledge_conversation_handler
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # هندلر سراسری خطا
@@ -213,6 +216,10 @@ def main() -> None:
     # 🆕 ثبت گزارش NCR
     app.add_handler(get_ncr_conversation_handler())
     logger.info("  ✓ ConversationHandler ثبت NCR ثبت شد")
+
+    # 🆕 ثبت دانش/تجربه سازمانی
+    app.add_handler(get_knowledge_conversation_handler())
+    logger.info("  ✓ ConversationHandler ثبت دانش/تجربه ثبت شد")
 
     for handler in get_menu_handlers():
         app.add_handler(handler)

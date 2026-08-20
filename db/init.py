@@ -174,6 +174,109 @@ def _migrate_project_contractors_lifecycle(cur) -> None:
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _migrate_knowledge_phase3(cur) -> None:
+    """
+    جدول knowledge_entries را به schema فاز۳ ارتقا میدهد:
+      - project_id و contractor_id از NOT NULL به nullable
+      - افزودن ستونهای interview_history_json / tree_path_json / org_metadata_json
+    idempotent — اگر schema از قبل بهروز باشد، بیصدا برمیگردد.
+    """
+    cols = cur.execute("PRAGMA table_info(knowledge_entries)").fetchall()
+    if not cols:
+        return  # جدول وجود ندارد — CREATE TABLE بعدی خودش میسازد
+
+    col_names = {c[1] for c in cols}
+    needs_rebuild = False
+
+    # بررسی ستونهای جدید
+    for new_col in (
+        "interview_history_json",
+        "tree_path_json",
+        "org_metadata_json",
+    ):
+        if new_col not in col_names:
+            needs_rebuild = True
+            break
+
+    # بررسی nullable بودن project_id و contractor_id
+    if not needs_rebuild:
+        for c in cols:
+            if c[1] in ("project_id", "contractor_id") and c[3] == 1:
+                needs_rebuild = True
+                break
+
+    if not needs_rebuild:
+        return
+
+    # بازسازی جدول (SQLite ALTER COLUMN ندارد)
+    cur.execute("PRAGMA foreign_keys = OFF")
+
+    cur.execute("""
+        CREATE TABLE knowledge_entries_new (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            kn_number                TEXT UNIQUE,
+            project_id               INTEGER REFERENCES projects(id),
+            contractor_id            INTEGER REFERENCES contractors(id),
+            status                   TEXT NOT NULL DEFAULT 'draft'
+                                     CHECK (status IN ('draft', 'submitted')),
+            knowledge_type           TEXT NOT NULL
+                                     CHECK (knowledge_type IN ('lesson','suggestion','explicit')),
+            reporter_name            TEXT NOT NULL,
+            reporter_title           TEXT,
+            reported_by              INTEGER NOT NULL REFERENCES users(id),
+            raw_description          TEXT,
+            fields_json              TEXT,
+            draft_text               TEXT,
+            reported_date            TEXT,
+            submitted_at             TEXT,
+            pdf_path                 TEXT,
+            docx_path                TEXT,
+            is_active                INTEGER NOT NULL DEFAULT 1
+                                     CHECK (is_active IN (0, 1)),
+            created_at               TEXT NOT NULL,
+            interview_history_json   TEXT,
+            tree_path_json           TEXT,
+            org_metadata_json        TEXT,
+            extra_data               TEXT
+        )
+    """)
+
+    # INSERT پویا: ستون‌هایی که در جدول قدیمی وجود ندارند با NULL پر میشوند.
+    new_cols = [
+        "id", "kn_number", "project_id", "contractor_id", "status",
+        "knowledge_type", "reporter_name", "reporter_title", "reported_by",
+        "raw_description", "fields_json", "draft_text", "reported_date",
+        "submitted_at", "pdf_path", "docx_path", "is_active", "created_at",
+        "interview_history_json", "tree_path_json", "org_metadata_json",
+        "extra_data",
+    ]
+    select_parts = []
+    for col in new_cols:
+        if col in col_names:
+            select_parts.append(col)
+        else:
+            select_parts.append("NULL")
+    cur.execute(
+        f"INSERT INTO knowledge_entries_new ({', '.join(new_cols)}) "
+        f"SELECT {', '.join(select_parts)} FROM knowledge_entries"
+    )
+
+    cur.execute("DROP TABLE knowledge_entries")
+    cur.execute("ALTER TABLE knowledge_entries_new RENAME TO knowledge_entries")
+
+    # indexes از نو (idempotent)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_entries_project "
+        "ON knowledge_entries(project_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_entries_status "
+        "ON knowledge_entries(status)"
+    )
+
+    cur.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db() -> None:
     """
     پایگاه داده SQLite را مقداردهی اولیه می‌کند.
@@ -407,6 +510,56 @@ def init_db() -> None:
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ncr_photos_ncr ON ncr_photos(ncr_id)")
+
+        # ── جدول ثبت دانش/تجربه (فاز دانش سازمانی) ──────────────────────
+        # هر ردیف = یک تجربه/دانش با چرخهٔ حیات draft → submitted.
+        # knowledge_type: lesson (درس‌آموخته) | suggestion (پیشنهاد) | explicit (دانش صریح)
+        # fields_json: فیلدهای ساختاریافته (استخراج AI + تکمیل کاربر) — JSON
+        # draft_text: پیش‌نویس متنی DANA تولیدشده در لحظهٔ پیش‌نمایش/ثبت
+        # نکتهٔ فاز۳: project_id و contractor_id اختیاریاند (دانش لزوماً
+        # به پروژه/پیمانکار خاصی وابسته نیست — اگر در متن بیاید در polish استخراج میشود).
+        _migrate_knowledge_phase3(cur)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_entries (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                kn_number                TEXT UNIQUE,
+                project_id               INTEGER REFERENCES projects(id),
+                contractor_id            INTEGER REFERENCES contractors(id),
+                status                   TEXT NOT NULL DEFAULT 'draft'
+                                         CHECK (status IN ('draft', 'submitted')),
+                knowledge_type           TEXT NOT NULL
+                                         CHECK (knowledge_type IN ('lesson','suggestion','explicit')),
+                reporter_name            TEXT NOT NULL,
+                reporter_title           TEXT,
+                reported_by              INTEGER NOT NULL REFERENCES users(id),
+                raw_description          TEXT,
+                fields_json              TEXT,
+                draft_text               TEXT,
+                reported_date            TEXT,
+                submitted_at             TEXT,
+                pdf_path                 TEXT,
+                docx_path                TEXT,
+                is_active                INTEGER NOT NULL DEFAULT 1
+                                         CHECK (is_active IN (0, 1)),
+                created_at               TEXT NOT NULL,
+                interview_history_json   TEXT,
+                tree_path_json           TEXT,
+                org_metadata_json        TEXT,
+                extra_data               TEXT
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_entries_status ON knowledge_entries(status)")
+
+        # ── جدول عکس‌های ثبت دانش ─────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_photos (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                knowledge_id INTEGER NOT NULL REFERENCES knowledge_entries(id),
+                path         TEXT NOT NULL,
+                uploaded_at  TEXT NOT NULL
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_photos_knowledge ON knowledge_photos(knowledge_id)")
 
         # ── شاخص‌ها (از DATA_SCHEMA.md) ──────────────────────────────────────
         cur.execute("""

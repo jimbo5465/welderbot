@@ -35,6 +35,9 @@ def main_menu_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     # NCR — گزارش عدم انطباق (برای همه سطوح مجاز)
     buttons.append([InlineKeyboardButton("🚨 ثبت گزارش عدم انطباق (NCR)", callback_data="ncr:new")])
 
+    # ثبت دانش/تجربه سازمانی (برای همه سطوح مجاز)
+    buttons.append([InlineKeyboardButton("📝 ثبت دانش/تجربه سازمانی", callback_data="kn:new")])
+
     is_level1 = can_manage_projects(telegram_id)
 
     # آیا کاربر حداقل در یک پروژه سطح ۲ دارد؟ (فاز ۱۲)

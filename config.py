@@ -54,6 +54,38 @@ NCR_EXPORT_PATH: str = os.path.join(_PROJECT_ROOT, "media", "exports")
 # مسیر ذخیره عکس‌های گزارش‌های NCR (هر گزارش یک زیرپوشه به نام ncr_id دارد)
 NCR_PHOTO_PATH: str = os.path.join(_PROJECT_ROOT, "media", "ncr_photos")
 
+# مسیر ذخیره عکس‌های ثبت دانش (هر رکورد یک زیرپوشه به نام knowledge id دارد)
+KN_PHOTO_PATH: str = os.path.join(_PROJECT_ROOT, "media", "kn_photos")
+
+# مسیر خروجی فایل‌های PDF/Word پیش‌نویس DANA ثبت دانش
+KN_OUTPUT_PATH: str = os.path.join(_PROJECT_ROOT, "media", "exports", "kn")
+
+# ─── هوش مصنوعی (استخراج فیلدهای دانش از متن آزاد) ──────────────────────────
+# کلاینت سازگار با OpenAI (پروتکل /v1/chat/completions).
+# پیش‌فرض: OpenCode Go — https://opencode.ai/zen/go/v1
+# اگر کلید یا مدل تنظیم نشده باشد، AI غیرفعال است و ربات به حالت
+# «پرسش دستی همه فیلدها» برمی‌گردد (fallback امن).
+
+# پایگاه آدرس OpenAI-سازگار
+KNOWLEDGE_AI_BASE_URL: str = os.environ.get(
+    "KNOWLEDGE_AI_BASE_URL", "https://opencode.ai/zen/go/v1"
+)
+
+# کلید: اول KNOWLEDGE_AI_API_KEY، سپس OPENCODE_API_KEY (کلید OpenCode Go/Zen)
+KNOWLEDGE_AI_API_KEY: str = os.environ.get(
+    "KNOWLEDGE_AI_API_KEY",
+    os.environ.get("OPENCODE_API_KEY", ""),
+)
+
+# نام مدل — باید دقیقاً با یکی از شناسه‌های /v1/models نقطه انتهایی یکی باشد.
+# خالی = AI غیرفعال (فهرست مدل‌ها:
+#   curl -H "Authorization: Bearer $OPENCODE_API_KEY" https://opencode.ai/zen/go/v1/models
+# )
+KNOWLEDGE_AI_MODEL: str = os.environ.get("KNOWLEDGE_AI_MODEL", "")
+
+# حداکثر زمان انتظار برای پاسخ مدل (ثانیه)
+KNOWLEDGE_AI_TIMEOUT: float = float(os.environ.get("KNOWLEDGE_AI_TIMEOUT", "60"))
+
 # ─── ایجاد خودکار پوشه‌های runtime در زمان import ────────────────────────────
 
 def _ensure_dirs() -> None:
@@ -63,6 +95,7 @@ def _ensure_dirs() -> None:
         MEDIA_PATH,                  # media/photos/
         EXCEL_EXPORT_PATH,           # media/exports/
         NCR_PHOTO_PATH,              # media/ncr_photos/
+        KN_PHOTO_PATH,               # media/kn_photos/
     ):
         os.makedirs(_dir, exist_ok=True)
 

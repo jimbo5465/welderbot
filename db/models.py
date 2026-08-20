@@ -1555,3 +1555,317 @@ def list_ncr_photos(ncr_id: int) -> list[dict]:
             (ncr_id,),
         ).fetchall()
         return _rows_to_dicts(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ثبت دانش/تجربه (فاز دانش سازمانی — جدول knowledge_entries)
+# ══════════════════════════════════════════════════════════════════════════════
+# چرخهٔ حیات: draft (پیش‌نویس) → submitted (ثبت نهایی + شماره‌دهی)
+# هر رکورد به یک (project_id, contractor_id) متصل است. عکس‌ها در knowledge_photos.
+# فیلدهای ساختاریافته در fields_json (JSON) — استخراج AI + تکمیل دستی کاربر.
+
+
+def _deserialize_knowledge(row: sqlite3.Row | None) -> dict | None:
+    """ردیف knowledge_entries را به dict تبدیل می‌کند؛ JSONها را از هم باز می‌کند."""
+    if row is None:
+        return None
+    d = dict(row)
+    if isinstance(d.get("fields_json"), str):
+        try:
+            d["fields_json"] = json.loads(d["fields_json"])
+        except (json.JSONDecodeError, TypeError):
+            d["fields_json"] = {}
+    if isinstance(d.get("extra_data"), str):
+        try:
+            d["extra_data"] = json.loads(d["extra_data"])
+        except (json.JSONDecodeError, TypeError):
+            d["extra_data"] = {}
+    elif d.get("extra_data") is None:
+        d["extra_data"] = {}
+    return d
+
+
+def add_knowledge_entry(
+    project_id: int | None,
+    contractor_id: int | None,
+    reported_by: int,
+    knowledge_type: str,
+    reporter_name: str,
+    reporter_title: str | None = None,
+    raw_description: str | None = None,
+    fields: dict | None = None,
+    draft_text: str | None = None,
+    reported_date: str | None = None,
+    extra_data: dict | None = None,
+) -> int:
+    """
+    یک رکورد دانش/تجربه جدید ثبت می‌کند (وضعیت اولیه: draft).
+
+    ورودی:
+        project_id:     پروژهٔ محل وقوع تجربه — از فاز۳ اختیاری است
+                        (تجربه لزوماً به پروژهٔ خاصی وابسته نیست؛ اگر در متن
+                        بیاید در polish استخراج میشود). None = NULL در DB.
+        contractor_id:  پیمانکار مرتبط — اختیاری (همانند project_id)
+        reported_by:    شناسهٔ کاربر گزارش‌دهنده در جدول users
+        knowledge_type: 'lesson' | 'suggestion' | 'explicit'
+        fields:         فیلدهای ساختاریافته (dict) — به JSON تبدیل می‌شود
+        draft_text:     پیش‌نویس متنی DANA تولیدشده
+
+    خروجی:
+        id ردیف جدید در جدول knowledge_entries
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO knowledge_entries (
+                project_id, contractor_id, status, knowledge_type,
+                reporter_name, reporter_title, reported_by,
+                raw_description, fields_json, draft_text,
+                reported_date, is_active, created_at, extra_data
+            ) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (
+                project_id, contractor_id, knowledge_type,
+                reporter_name, reporter_title, reported_by,
+                raw_description,
+                json.dumps(fields, ensure_ascii=False) if fields else None,
+                draft_text,
+                reported_date,
+                _now_str(),
+                json.dumps(extra_data, ensure_ascii=False) if extra_data else None,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+def get_knowledge_entry_by_id(knowledge_id: int) -> dict | None:
+    """یک رکورد دانش را با شناسه برمیگرداند (به‌همراه نام پروژه/پیمانکار)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT k.*, p.name AS project_name, c.name AS contractor_name
+            FROM knowledge_entries k
+            LEFT JOIN projects p ON p.id = k.project_id
+            LEFT JOIN contractors c ON c.id = k.contractor_id
+            WHERE k.id = ?
+            """,
+            (knowledge_id,),
+        ).fetchone()
+        return _deserialize_knowledge(row)
+
+
+def set_knowledge_fields(knowledge_id: int, fields: dict, draft_text: str | None = None) -> None:
+    """فیلدهای ساختاریافته (و متن پیش‌نویس اختیاری) یک رکورد دانش را به‌روز می‌کند."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE knowledge_entries SET fields_json = ?, draft_text = ? WHERE id = ?",
+            (json.dumps(fields, ensure_ascii=False), draft_text, knowledge_id),
+        )
+        conn.commit()
+
+
+def submit_knowledge_entry(
+    knowledge_id: int,
+    kn_number: str,
+    pdf_path: str | None = None,
+    docx_path: str | None = None,
+) -> None:
+    """
+    ثبت نهایی: وضعیت → submitted + اختصاص شماره + زمان ثبت.
+    مسیرهای خروجی PDF/DOCX (اختیاری) هم ذخیره می‌شوند.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE knowledge_entries
+            SET status = 'submitted', kn_number = ?, submitted_at = ?,
+                pdf_path = ?, docx_path = ?
+            WHERE id = ?
+            """,
+            (kn_number, _now_str(), pdf_path, docx_path, knowledge_id),
+        )
+        conn.commit()
+
+
+def set_knowledge_inactive(knowledge_id: int) -> None:
+    """رکورد دانش را غیرفعال می‌کند (soft-delete)."""
+    with get_connection() as conn:
+        conn.execute("UPDATE knowledge_entries SET is_active = 0 WHERE id = ?", (knowledge_id,))
+        conn.commit()
+
+
+def list_knowledge_entries(active_only: bool = True) -> list[dict]:
+    """فهرست تمام رکوردهای دانش (جدیدترین اول)."""
+    with get_connection() as conn:
+        query = "SELECT * FROM knowledge_entries"
+        if active_only:
+            query += " WHERE is_active = 1"
+        query += " ORDER BY created_at DESC"
+        rows = conn.execute(query).fetchall()
+        return [_deserialize_knowledge(r) for r in rows]  # type: ignore[misc]
+
+
+def list_knowledge_entries_by_project(
+    project_id: int,
+    statuses: tuple[str, ...] | None = None,
+    active_only: bool = True,
+) -> list[dict]:
+    """فهرست رکوردهای دانش یک پروژه (جدیدترین اول)."""
+    with get_connection() as conn:
+        query = "SELECT * FROM knowledge_entries WHERE project_id = ?"
+        params: list = [project_id]
+        if active_only:
+            query += " AND is_active = 1"
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            query += f" AND status IN ({placeholders})"
+            params.extend(statuses)
+        query += " ORDER BY created_at DESC"
+        rows = conn.execute(query, params).fetchall()
+        return [_deserialize_knowledge(r) for r in rows]  # type: ignore[misc]
+
+
+# ── عکس‌های دانش ─────────────────────────────────────────────────────────────
+
+def add_knowledge_photo(knowledge_id: int, path: str) -> int:
+    """مسیر یک عکس را به رکورد دانش اضافه می‌کند."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO knowledge_photos (knowledge_id, path, uploaded_at) VALUES (?, ?, ?)",
+            (knowledge_id, path, _now_str()),
+        )
+        conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+def list_knowledge_photos(knowledge_id: int) -> list[dict]:
+    """فهرست عکس‌های یک رکورد دانش (به ترتیب آپلود)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM knowledge_photos WHERE knowledge_id = ? ORDER BY id",
+            (knowledge_id,),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# توابع فاز۳ — مصاحبه / درخت دانش / متادیتای سازمانی / resume
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def set_knowledge_interview_history(knowledge_id: int, history: list) -> None:
+    """
+    تاریخچهٔ مکالمهٔ مصاحا را در DB ذخیره میکند.
+    history: لیست پیامها به شکل [{role: 'user'|'assistant', content: str}, ...]
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE knowledge_entries SET interview_history_json = ? WHERE id = ?",
+            (json.dumps(history, ensure_ascii=False) if history else None,
+             knowledge_id),
+        )
+        conn.commit()
+
+
+def get_knowledge_interview_history(knowledge_id: int) -> list:
+    """تاریخچهٔ مصاحبه را از DB میخواند (لیست خالی اگر وجود نداشته باشد)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT interview_history_json FROM knowledge_entries WHERE id = ?",
+            (knowledge_id,),
+        ).fetchone()
+    raw = row["interview_history_json"] if row else None
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def set_knowledge_tree_path(knowledge_id: int, path: list[str]) -> None:
+    """مسیر انتخابی درخت دانش را ذخیره میکند (آرایه از نام نودها)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE knowledge_entries SET tree_path_json = ? WHERE id = ?",
+            (json.dumps(path, ensure_ascii=False) if path else None,
+             knowledge_id),
+        )
+        conn.commit()
+
+
+def get_knowledge_tree_path(knowledge_id: int) -> list[str]:
+    """مسیر درخت دانش ذخیره‌شده را برمیگرداند."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT tree_path_json FROM knowledge_entries WHERE id = ?",
+            (knowledge_id,),
+        ).fetchone()
+    raw = row["tree_path_json"] if row else None
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def set_knowledge_org_metadata(knowledge_id: int, org_data: dict) -> None:
+    """
+    متادیتای سازمانی را ذخیره میکند.
+    org_data کلیدهای ممکن: committee, seed, colleagues, scope, hashtags_override.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE knowledge_entries SET org_metadata_json = ? WHERE id = ?",
+            (json.dumps(org_data, ensure_ascii=False) if org_data else None,
+             knowledge_id),
+        )
+        conn.commit()
+
+
+def get_knowledge_org_metadata(knowledge_id: int) -> dict:
+    """متادیتای سازمانی ذخیره‌شده را برمیگرداند."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT org_metadata_json FROM knowledge_entries WHERE id = ?",
+            (knowledge_id,),
+        ).fetchone()
+    raw = row["org_metadata_json"] if row else None
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def find_pending_knowledge_by_user(telegram_id: int) -> dict | None:
+    """
+    آخرین رکورد دانش ناتمام (draft بدون kn_number) یک کاربر را برمیگرداند —
+    برای قابلیت resume بعد از restart ربات استفاده میشود.
+
+    ناتمام = status='draft' AND kn_number IS NULL AND (interview_history_json
+    یا raw_description پر باشد — یعنی ثبت شروع شده ولی تمام نشده).
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT k.*
+            FROM knowledge_entries k
+            JOIN users u ON u.id = k.reported_by
+            WHERE u.telegram_id = ?
+              AND k.status = 'draft'
+              AND k.kn_number IS NULL
+              AND (k.interview_history_json IS NOT NULL
+                   OR (k.raw_description IS NOT NULL AND k.raw_description != ''))
+            ORDER BY k.created_at DESC
+            LIMIT 1
+            """,
+            (telegram_id,),
+        ).fetchone()
+        return _deserialize_knowledge(row)
